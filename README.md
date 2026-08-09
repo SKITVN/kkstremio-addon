@@ -1,53 +1,72 @@
-# Nuvio PhimAPI Addon v2
+# Nuvio PhimAPI Addon v3
 
-Bản sửa hoàn chỉnh cho Render/Nuvio.
+Bản này sửa ba lỗi chính của các bản trước:
 
-## Đã sửa
+1. **Poster không hiện**
+   - API trả `poster_url`/`thumb_url` từ nhiều CDN khác nhau.
+   - Addon có `/image` proxy để Nuvio lấy ảnh thông qua chính server Render.
 
-- Phim Bộ dùng `type: series` và endpoint riêng.
-- Phim Lẻ dùng `type: movie`.
-- Hoạt Hình dùng `type: series`.
-- Poster lấy trực tiếp từ `poster_url`; nếu API trả filename thì ghép với `pathImage`.
-- Có fallback API legacy nếu endpoint v1 không trả dữ liệu.
-- Có metadata và danh sách tập.
-- Có stream `link_m3u8` và fallback `link_embed`.
-- Render chạy bằng duy nhất `server.js`, không phụ thuộc `api/index.js`.
+2. **Phim Bộ không hiện**
+   - Dùng đúng endpoint:
+     `/danh-sach/phim-bo`
+   - Catalog khai báo đúng `type: series`.
+
+3. **Mất Phim Mới / Phim Lẻ / Phim Chiếu Rạp**
+   - Dùng đúng các endpoint danh sách:
+     - `/danh-sach/phim-moi-cap-nhat`
+     - `/danh-sach/phim-bo`
+     - `/danh-sach/phim-le`
+     - `/danh-sach/phim-chieu-rap`
+     - `/danh-sach/hoat-hinh`
+
+Các endpoint danh sách cũ của PhimAPI hỗ trợ `page` và trả `items`, `poster_url`, `thumb_url`, `slug`; tài liệu PhimAPI cũng xác nhận `phim-bo`, `phim-le`, `hoat-hinh`, `tv-shows`, `phim-chieu-rap` là các loại hợp lệ. citeturn2search0
 
 ## Render
 
-Build:
+Build Command:
+
 ```text
 npm install
 ```
 
-Start:
+Start Command:
+
 ```text
 npm start
 ```
 
-Health:
-```text
-/health
-```
+Không cần thư mục `api`.
 
-Manifest:
-```text
-/manifest.json
-```
+## Test sau deploy
 
-Sau khi deploy, dùng:
+Thay `TEN-SERVICE` bằng tên Render của bạn:
+
+```text
+https://TEN-SERVICE.onrender.com/health
+```
 
 ```text
 https://TEN-SERVICE.onrender.com/manifest.json
 ```
 
-### Quan trọng khi cập nhật
+Catalog:
 
-Nuvio lưu manifest/catalog đã cài. Sau khi deploy bản mới:
+```text
+https://TEN-SERVICE.onrender.com/catalog/movie/phim-moi.json
+https://TEN-SERVICE.onrender.com/catalog/series/phim-bo.json
+https://TEN-SERVICE.onrender.com/catalog/movie/phim-le.json
+https://TEN-SERVICE.onrender.com/catalog/movie/phim-chieu-rap.json
+https://TEN-SERVICE.onrender.com/catalog/series/hoat-hinh.json
+```
 
-1. Xóa addon cũ khỏi Nuvio.
-2. Thêm lại URL `/manifest.json`.
-3. Nếu Render Free đang sleep, mở `/health` trước để đánh thức service.
-4. Sau đó mở lại Nuvio.
+## Quan trọng
 
-PhimAPI API v1 cung cấp `poster_url`, `thumb_url`, danh sách phim trong `data.items`, và episode trong `data.item.episodes`; episode có `link_m3u8`/`link_embed`.
+Sau khi deploy bản v3:
+
+1. Vào Nuvio.
+2. Xóa addon PhimAPI cũ.
+3. Thêm lại URL:
+   `https://TEN-SERVICE.onrender.com/manifest.json`
+4. Chờ Render thức dậy nếu đang dùng Free instance.
+
+Không dùng manifest cũ đã cache trong Nuvio.

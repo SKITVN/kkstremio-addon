@@ -1,8 +1,8 @@
 {
   "name": "nuvio-phimapi-addon",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "Nuvio/Stremio PhimAPI catalog, metadata and stream addon",
+  "description": "Nuvio/Stremio PhimAPI addon",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
