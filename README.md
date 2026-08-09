@@ -1,100 +1,55 @@
-# KKPhim Stremio Addon — GitHub + Render
+# KKPhim Stremio Addon v5 — GitHub + Render
 
-Addon Stremio dùng API KKPhim/PhimAPI (`https://phimapi.com`).
+Bản này được xây dựng lại theo tài liệu API KKPhim hiện tại.
 
-## Quan trọng: lỗi poster đã được sửa
+## Các phần chính
 
-API v1 của KKPhim có thể trả `poster_url`/`thumb_url` dưới dạng đường dẫn tương đối, ví dụ `upload/vod/...`. Trong khi API cũ `/danh-sach/...` và `/phim/{slug}` trả URL đầy đủ trên `phimimg.com`.
+- Phim mới cập nhật **v2**: `/danh-sach/phim-moi-cap-nhat-v2`
+- Phim bộ: `/v1/api/danh-sach/phim-bo`
+- Phim lẻ: `/v1/api/danh-sach/phim-le`
+- Phim chiếu rạp: `/v1/api/danh-sach/phim-chieu-rap`
+- Hoạt hình và hoạt hình Trung Quốc
+- Phân loại theo quốc gia
+- Phân loại theo thể loại
+- Phân loại theo năm
+- Tìm kiếm phim / phim bộ
+- Thông tin phim đầy đủ: nội dung, poster, backdrop, năm, thể loại, quốc gia, diễn viên, đạo diễn, rating, trailer, tập phim
+- Stream HLS `link_m3u8` và fallback `link_embed`
+- Phân biệt ID Movie/Series ngay từ catalog để không làm mất phim bộ do metadata TMDB bị thiếu/sai type
+- Phân trang Stremio → `page` API KKPhim
 
-Addon này:
+## Deploy Render
 
-- ưu tiên URL poster đầy đủ từ API;
-- dùng API cũ `/phim/{slug}` để lấy URL poster chuẩn khi catalog v1 chỉ trả filename/relative path;
-- dùng `/v1/api/phim/{slug}/images` để lấy poster/backdrop TMDB khi API cung cấp ảnh;
-- metadata lấy thêm diễn viên/ê-kíp và keywords.
+Project này dùng `npm install`, không yêu cầu `package-lock.json`.
 
-## Các nhóm GET KKPhim đã tích hợp
+### GitHub
 
-### Phim mới / danh sách
+Upload toàn bộ project vào repository GitHub.
 
-- `/danh-sach/phim-moi-cap-nhat`
-- `/v1/api/home`
-- `/v1/api/danh-sach`
-- `/danh-sach/{type}` với `phim-le`, `phim-bo`, `hoat-hinh`, `tv-shows`, `phim-chieu-rap`
-- `/v1/api/tim-kiem`
+### Render
 
-### Chi tiết
+Dùng **New → Blueprint** và chọn repository. Render đọc `render.yaml`.
 
-- `/phim/{slug}`
-- `/phim/id/{id}`
-- `/tmdb/{type}/{id}`
-- `/imdb/title/{id}`
-- `/v1/api/phim/{slug}`
-- `/v1/api/phim/{slug}/images`
-- `/v1/api/phim/{slug}/peoples`
-- `/v1/api/phim/{slug}/keywords`
+Hoặc Web Service:
 
-### Bộ lọc
+- Build Command: `npm install`
+- Start Command: `npm start`
+- Health Check: `/manifest.json`
 
-- `/the-loai`
-- `/v1/api/the-loai`
-- `/v1/api/the-loai/{slug}`
-- `/quoc-gia`
-- `/v1/api/quoc-gia/{slug}`
-- `/nam-phat-hanh`
-- `/v1/api/nam/{year}`
-
-Các bộ lọc v1 dùng `page`, `limit`, `category`, `country`, `year`, `sort_field`, `sort_type`, `sort_lang`.
-
-## Catalog trong Stremio
-
-- Phim mới
-- Phim bộ
-- Phim lẻ
-- Hoạt hình (movie/series)
-- Hoạt hình Trung Quốc (movie/series)
-- Chiếu rạp
-- Vietsub
-- Thuyết minh
-- Lồng tiếng
-- Tìm kiếm movie/series
-
-## Deploy GitHub + Render
-
-1. Tạo repository GitHub mới.
-2. Upload toàn bộ file của project.
-3. Render → **New → Blueprint** → chọn repository.
-4. Render đọc `render.yaml` và deploy.
-5. Sau khi deploy, dùng:
+Manifest sau khi deploy:
 
 ```text
 https://TEN-SERVICE.onrender.com/manifest.json
 ```
 
-để cài addon vào Stremio.
-
-## Nếu Render đã có service
-
-Nếu service hiện tại đang lỗi vì `npm ci`, đổi Build Command thành:
-
-```text
-npm install
-```
-
-Start Command:
-
-```text
-npm start
-```
-
-## Chạy local
+## Local
 
 ```bash
 npm install
 npm start
 ```
 
-Manifest:
+Mở:
 
 ```text
 http://localhost:7000/manifest.json
@@ -102,9 +57,6 @@ http://localhost:7000/manifest.json
 
 ## Lưu ý
 
-API nguồn và URL stream có thể thay đổi. Render Free có thể sleep khi không có traffic, nên request đầu tiên sau một thời gian không hoạt động có thể chậm.
-
-
-## v1.3 pagination / phim bộ
-
-Bản 1.3 dùng các endpoint v1 `/v1/api/danh-sach/{type}` thay cho endpoint legacy `/danh-sach/{type}` cho các catalog phim bộ/phim lẻ/hoạt hình. API v1 có pagination và bộ lọc đầy đủ. Catalog manifest cũng khai báo `extra.skip` để Stremio có thể yêu cầu các trang tiếp theo.
+- Sau khi thay addon trên GitHub, nên gỡ addon KKPhim cũ khỏi Stremio rồi cài lại manifest để tránh cache manifest/catalog cũ.
+- API nguồn và stream phụ thuộc KKPhim/PhimAPI và có thể thay đổi.
+- Render Free có thể sleep khi không có traffic.

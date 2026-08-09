@@ -1,6 +1,6 @@
 {
   "name": "kkphim-stremio-addon",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "private": true,
   "description": "Stremio addon that exposes KKPhim/PhimAPI catalogs, metadata and streams.",
   "main": "addon.js",
