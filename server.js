@@ -10,5 +10,4 @@ serveHTTP(addonInterface, {
   cache: "1d"
 });
 
-console.log(`KKPhim Stremio addon listening on http://${host}:${port}`);
-console.log(`Manifest: http://localhost:${port}/manifest.json`);
+console.log(`KKPhim Stremio addon listening on ${host}:${port}`);
