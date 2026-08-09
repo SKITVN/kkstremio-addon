@@ -5,292 +5,456 @@ app.disable("x-powered-by");
 
 const PORT = process.env.PORT || 10000;
 const API_BASE = "https://phimapi.com";
-const ADDON_VERSION = "5.0.0";
-const PAGE_SIZE = 24;
+// Public URL of this addon (Render sets RENDER_EXTERNAL_URL). Used for absolute image proxy links.
+const PUBLIC_URL = (
+  process.env.PUBLIC_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  ""
+).replace(/\/+$/, "");
 
 const CATALOGS = [
-  // Home is mixed in the upstream API. We expose it as movie and coerce
-  // catalog cards to movie so Nuvio can display the row consistently.
-  { id: "phim-moi", name: "Phim Mới", type: "movie", endpoint: "home" },
-  { id: "phim-bo", name: "Phim Bộ", type: "series", endpoint: "danh-sach/phim-bo" },
-  { id: "phim-le", name: "Phim Lẻ", type: "movie", endpoint: "danh-sach/phim-le" },
-  { id: "phim-chieu-rap", name: "Phim Chiếu Rạp", type: "movie", endpoint: "danh-sach/phim-chieu-rap" },
-  { id: "hoat-hinh", name: "Hoạt Hình", type: "series", endpoint: "danh-sach/hoat-hinh" }
+  { id: "phim-moi", name: "Phim Mới", type: "movie", slug: "" },
+  { id: "phim-bo", name: "Phim Bộ", type: "series", slug: "phim-bo" },
+  { id: "phim-le", name: "Phim Lẻ", type: "movie", slug: "phim-le" },
+  { id: "phim-chieu-rap", name: "Phim Chiếu Rạp", type: "movie", slug: "phim-chieu-rap" },
+  { id: "hoat-hinh", name: "Hoạt Hình", type: "series", slug: "hoat-hinh" }
 ];
 
-const IMAGE_HOSTS = new Set([
-  "phimimg.com",
+const ALLOWED_IMAGE_HOSTS = new Set([
   "phimapi.com",
+  "phimimg.com",
   "img.phimapi.com",
   "image.tmdb.org"
 ]);
 
-function int(value, fallback, min, max) {
+const DEFAULT_CDN = "https://phimimg.com";
+
+function num(value, fallback, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-function getClientPage(query) {
-  // Nuvio/Stremio pagination uses skip. Keep one upstream page (24 items)
-  // per request so skip=24 -> upstream page 2, skip=48 -> page 3, etc.
-  if (query.page !== undefined) {
-    return int(query.page, 1, 1, 100000);
-  }
-  const skip = int(query.skip, 0, 0, 10000000);
-  return Math.floor(skip / PAGE_SIZE) + 1;
+function pageFromQuery(query) {
+  if (query.page !== undefined) return num(query.page, 1, 1, 10000);
+
+  const skip = num(query.skip, 0, 0, 1000000);
+  const clientPageSize = num(query.limit, 24, 1, 64);
+
+  return Math.floor(skip / clientPageSize) + 1;
 }
 
-function getBaseUrl(req) {
-  const proto =
-    req.headers["x-forwarded-proto"] ||
-    (req.secure ? "https" : "http");
-  const host = req.get("host");
-  return `${proto}://${host}`;
-}
-
-async function fetchJson(path) {
-  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
-  const response = await fetch(url, {
-    headers: {
-      accept: "application/json",
-      "user-agent": "Nuvio-PhimAPI-Addon/5.0"
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error(`PhimAPI HTTP ${response.status}: ${url}`);
-  }
-  return response.json();
-}
-
-function dataRoot(payload) {
-  return payload?.data ?? payload ?? {};
-}
-
-function itemsOf(payload) {
-  const d = dataRoot(payload);
-  if (Array.isArray(d.items)) return d.items;
-  if (Array.isArray(payload?.items)) return payload.items;
-  return [];
-}
-
-function paginationOf(payload) {
-  const d = dataRoot(payload);
-  return d?.params?.pagination || d?.pagination || payload?.pagination || null;
-}
-
-function imageBaseOf(payload) {
-  const d = dataRoot(payload);
-  return (
-    d?.pathImage ||
-    payload?.pathImage ||
-    "https://phimapi.com/uploads/movies/"
-  );
-}
-
-function absoluteImage(value, base) {
-  if (!value) return null;
-  const s = String(value).trim();
-  if (/^https?:\/\//i.test(s)) return s;
-  return `${String(base).replace(/\/+$/, "")}/${s.replace(/^\/+/, "")}`;
-}
-
-function safeProxy(baseUrl, imageUrl) {
-  if (!imageUrl) return null;
-  // Absolute proxy URL. Relative URLs are not reliable in Nuvio/Stremio.
-  return `${baseUrl}/image?url=${encodeURIComponent(imageUrl)}`;
-}
-
-function imageCandidates(item, base) {
-  const candidates = [
-    absoluteImage(item?.poster_url, base),
-    absoluteImage(item?.poster, base),
-    absoluteImage(item?.thumb_url, base),
-    absoluteImage(item?.thumb, base)
-  ].filter(Boolean);
-
-  return [...new Set(candidates)];
-}
-
-function choosePoster(item, base, baseUrl) {
-  const candidates = imageCandidates(item, base);
-  // Prefer the original direct URL. If Nuvio cannot fetch the CDN image,
-  // the proxy URL is available as a deterministic fallback.
-  return candidates[0] || null;
-}
-
-function chooseBackground(item, base) {
-  const candidates = [
-    absoluteImage(item?.thumb_url, base),
-    absoluteImage(item?.thumb, base),
-    absoluteImage(item?.poster_url, base),
-    absoluteImage(item?.poster, base)
-  ].filter(Boolean);
-  return candidates[0] || null;
-}
-
-function itemType(item, fallback) {
-  const t = String(
-    item?.tmdb?.type ||
-    item?.type ||
-    item?.movie_type ||
-    ""
-  ).toLowerCase();
-
-  if (t === "tv" || t === "series" || t === "tvshow") return "series";
-  if (t === "movie" || t === "phim-le") return "movie";
-  return fallback;
-}
-
-function metaCard(item, fallbackType, base, baseUrl) {
-  if (!item?.slug) return null;
-
-  const directPoster = choosePoster(item, base, baseUrl);
-  const directBackground = chooseBackground(item, base);
-  const type = itemType(item, fallbackType);
-
-  const meta = {
-    id: `phimapi:${item.slug}`,
-    type,
-    name: item.name || item.origin_name || item.slug,
-    poster: directPoster || safeProxy(baseUrl, directPoster),
-    posterShape: "poster"
-  };
-
-  if (directBackground) meta.background = directBackground;
-  if (item.content || item.description) {
-    meta.description = item.content || item.description;
-  }
-  if (item.year) meta.year = Number(item.year);
-
-  return meta;
-}
-
-function filterParams(query, page, includeLimit = false) {
+function buildFilterParams(query, page) {
   const p = new URLSearchParams();
   p.set("page", String(page));
 
-  if (includeLimit) p.set("limit", String(PAGE_SIZE));
-
-  for (const key of [
+  const allowed = [
     "category",
     "country",
     "year",
     "sort_field",
     "sort_type",
     "sort_lang"
-  ]) {
+  ];
+
+  for (const key of allowed) {
     if (query[key] !== undefined && query[key] !== "") {
       p.set(key, String(query[key]));
     }
   }
+
   return p;
 }
 
-async function catalogPayload(catalog, query) {
-  const page = getClientPage(query);
-  const params = filterParams(query, page);
+async function fetchJson(path) {
+  const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
 
-  let path;
-  if (catalog.endpoint === "home") {
-    path = `/v1/api/home?${params.toString()}`;
-  } else {
-    path = `/v1/api/${catalog.endpoint}?${params.toString()}`;
+  const r = await fetch(url, {
+    headers: {
+      accept: "application/json",
+      "user-agent": "Mozilla/5.0 Nuvio-PhimAPI-Addon/4.1"
+    }
+  });
+
+  if (!r.ok) {
+    throw new Error(`PhimAPI HTTP ${r.status}: ${url}`);
   }
 
-  const payload = await fetchJson(path);
+  return r.json();
+}
+
+function unwrapData(data) {
+  return data?.data ?? data ?? {};
+}
+
+function listItems(data) {
+  const d = unwrapData(data);
+  return Array.isArray(d?.items)
+    ? d.items
+    : Array.isArray(data?.items)
+      ? data.items
+      : [];
+}
+
+function pagination(data) {
+  const d = unwrapData(data);
+  return (
+    d?.params?.pagination ||
+    d?.pagination ||
+    data?.pagination ||
+    null
+  );
+}
+
+/**
+ * CDN base từ API:
+ * - APP_DOMAIN_CDN_IMAGE = "https://phimimg.com"  (list + detail)
+ * - poster_url trong list là relative: "uploads/movies/..."
+ * - poster_url trong detail thường đã absolute
+ */
+function imageBase(data) {
+  const d = unwrapData(data);
+  const base =
+    d?.APP_DOMAIN_CDN_IMAGE ||
+    data?.APP_DOMAIN_CDN_IMAGE ||
+    d?.pathImage ||
+    data?.pathImage ||
+    DEFAULT_CDN;
+
+  return String(base).replace(/\/+$/, "");
+}
+
+function absoluteImage(value, base) {
+  if (!value) return null;
+
+  let s = String(value).trim();
+  if (!s) return null;
+
+  // Already absolute
+  if (/^https?:\/\//i.test(s)) return s;
+
+  // Protocol-relative
+  if (s.startsWith("//")) return `https:${s}`;
+
+  s = s.replace(/^\/+/, "");
+  const b = String(base || DEFAULT_CDN).replace(/\/+$/, "");
+  return `${b}/${s}`;
+}
+
+/**
+ * Prefer direct CDN URL (works in Nuvio/Stremio).
+ * Fallback to absolute proxy URL if PUBLIC_URL is set and direct fails policy.
+ */
+function imageProxyUrl(absoluteUrl, req) {
+  if (!absoluteUrl) return null;
+
+  // Direct CDN is preferred — phimimg.com allows hotlinking and is fast.
+  // Only use proxy when explicitly forced.
+  if (process.env.FORCE_IMAGE_PROXY !== "1") {
+    return absoluteUrl;
+  }
+
+  const origin =
+    PUBLIC_URL ||
+    (req
+      ? `${req.protocol}://${req.get("host")}`
+      : "");
+
+  if (!origin) {
+    // Relative proxy is useless for clients — return direct instead
+    return absoluteUrl;
+  }
+
+  return `${origin}/image?url=${encodeURIComponent(absoluteUrl)}`;
+}
+
+function posterFor(item, base, req) {
+  const value =
+    item.poster_url ||
+    item.poster ||
+    item.thumb_url ||
+    item.thumb;
+
+  const direct = absoluteImage(value, base);
+  return imageProxyUrl(direct, req);
+}
+
+function backgroundFor(item, base, req) {
+  const value =
+    item.thumb_url ||
+    item.thumb ||
+    item.poster_url ||
+    item.poster;
+
+  const direct = absoluteImage(value, base);
+  return imageProxyUrl(direct, req);
+}
+
+function typeForItem(item, fallback) {
+  const t = String(item?.tmdb?.type || item?.type || "").toLowerCase();
+
+  if (
+    t === "tv" ||
+    t === "series" ||
+    t === "tvshow" ||
+    t === "hoathinh" ||
+    item?.type === "series" ||
+    item?.type === "tvshows"
+  ) {
+    return "series";
+  }
+
+  // API uses type: "single" for movies
+  if (t === "single" || t === "movie") return "movie";
+
+  return fallback || "movie";
+}
+
+function stripHtml(html) {
+  if (!html) return undefined;
+  return String(html)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim() || undefined;
+}
+
+function namesOf(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .map(x => (typeof x === "string" ? x : x?.name || x?.slug))
+    .filter(Boolean);
+}
+
+function metaFromItem(item, catalogType, base, req) {
+  const slug = item?.slug;
+  if (!slug) return null;
+
+  const type = typeForItem(item, catalogType);
+  const poster = posterFor(item, base, req);
+  const background = backgroundFor(item, base, req);
+
+  const imdbScore =
+    item?.imdb?.vote_average ||
+    item?.tmdb?.vote_average ||
+    null;
+
+  const genres = namesOf(item.category);
+  const countries = namesOf(item.country);
+
+  const meta = {
+    id: `phimapi:${slug}`,
+    type,
+    name: item.name || item.origin_name || slug,
+    poster,
+    background,
+    posterShape: "poster"
+  };
+
+  if (item.origin_name && item.origin_name !== item.name) {
+    meta.originalTitle = item.origin_name;
+  }
+
+  const desc = stripHtml(item.content || item.description);
+  if (desc) meta.description = desc;
+
+  if (item.year) meta.year = Number(item.year);
+
+  if (genres.length) meta.genres = genres;
+
+  if (imdbScore) {
+    meta.imdbRating = String(Number(imdbScore).toFixed(1));
+  }
+
+  // Extra release info line for catalog cards
+  const bits = [];
+  if (item.quality) bits.push(item.quality);
+  if (item.lang) bits.push(item.lang);
+  if (item.episode_current && item.episode_current !== "Full") {
+    bits.push(item.episode_current);
+  }
+  if (bits.length) {
+    meta.releaseInfo = bits.join(" • ");
+  }
+
+  return meta;
+}
+
+/*
+ * The v1 API returns ~24 items/page for lists.
+ * Combine a few API pages into one Nuvio response for denser catalogs.
+ */
+async function getCatalogItems(catalog, query) {
+  const firstPage = pageFromQuery(query);
+  const pagesToLoad = num(query.pages, 3, 1, 5);
+
+  const paths = [];
+
+  for (let i = 0; i < pagesToLoad; i++) {
+    const page = firstPage + i;
+    const params = buildFilterParams(query, page);
+
+    if (catalog.slug) {
+      paths.push(`/v1/api/danh-sach/${catalog.slug}?${params.toString()}`);
+    } else {
+      paths.push(`/v1/api/danh-sach?${params.toString()}`);
+    }
+  }
+
+  const responses = await Promise.allSettled(paths.map(fetchJson));
+
+  const seen = new Set();
+  const items = [];
+  let firstPagination = null;
+  let base = DEFAULT_CDN;
+
+  for (const result of responses) {
+    if (result.status !== "fulfilled") {
+      console.error(result.reason);
+      continue;
+    }
+
+    const data = result.value;
+    const currentItems = listItems(data);
+
+    if (!firstPagination) {
+      firstPagination = pagination(data);
+    }
+
+    base = imageBase(data);
+
+    for (const item of currentItems) {
+      const key = item.slug || item._id || item.name;
+      if (!key || seen.has(key)) continue;
+
+      seen.add(key);
+      items.push(item);
+    }
+  }
+
   return {
-    payload,
-    page,
-    items: itemsOf(payload),
-    pagination: paginationOf(payload),
-    base: imageBaseOf(payload)
+    items,
+    base,
+    pagination: firstPagination,
+    pagesLoaded: pagesToLoad
   };
 }
 
-async function movieDetail(slug) {
-  const payload = await fetchJson(`/v1/api/phim/${encodeURIComponent(slug)}`);
-  const root = dataRoot(payload);
+async function getMovie(slug) {
+  const data = await fetchJson(`/v1/api/phim/${encodeURIComponent(slug)}`);
+  const d = unwrapData(data);
+
   return {
-    raw: payload,
+    raw: data,
     item:
-      root?.item ||
-      payload?.item ||
-      root?.movie ||
-      payload?.movie ||
-      null
+      d?.item ||
+      data?.item ||
+      data?.movie ||
+      d?.movie ||
+      null,
+    base: imageBase(data)
   };
 }
 
-async function movieImages(slug) {
+async function getMovieImages(slug) {
   try {
-    const payload = await fetchJson(
+    const data = await fetchJson(
       `/v1/api/phim/${encodeURIComponent(slug)}/images`
     );
-    return dataRoot(payload);
-  } catch (error) {
-    console.error("IMAGE META ERROR:", error.message);
+    return unwrapData(data);
+  } catch (e) {
+    console.error("images:", e.message);
     return null;
   }
 }
 
-function tmdbPoster(images) {
-  const p = images?.image_sizes?.poster;
-  if (!p) return null;
-  return p.w780 || p.w500 || p.w342 || p.original || null;
+function extractTMDBPoster(images) {
+  const sizes = images?.image_sizes?.poster;
+  if (!sizes) return null;
+
+  return (
+    sizes.w500 ||
+    sizes.w780 ||
+    sizes.w342 ||
+    sizes.original ||
+    null
+  );
 }
 
-function tmdbBackdrop(images) {
-  const b = images?.image_sizes?.backdrop;
-  if (!b) return null;
-  return b.w1280 || b.w780 || b.w300 || b.original || null;
+function extractTMDBBackdrop(images) {
+  const sizes = images?.image_sizes?.backdrop;
+  if (!sizes) return null;
+
+  return (
+    sizes.w1280 ||
+    sizes.w780 ||
+    sizes.w300 ||
+    sizes.original ||
+    null
+  );
+}
+
+function episodeList(item) {
+  if (Array.isArray(item?.episodes)) {
+    return item.episodes;
+  }
+
+  if (Array.isArray(item?.server_data)) {
+    return [{ server_data: item.server_data }];
+  }
+
+  return [];
 }
 
 function episodeEntries(item) {
-  const servers = Array.isArray(item?.episodes)
-    ? item.episodes
-    : Array.isArray(item?.server_data)
-      ? [{ server_data: item.server_data }]
-      : [];
+  const result = [];
 
-  const out = [];
-  servers.forEach((server, serverIndex) => {
+  episodeList(item).forEach((server, serverIndex) => {
     const serverName =
       server?.server_name ||
       server?.name ||
       `Server ${serverIndex + 1}`;
 
-    const episodes =
-      Array.isArray(server?.server_data)
-        ? server.server_data
-        : Array.isArray(server?.episodes)
-          ? server.episodes
-          : [];
+    const eps = Array.isArray(server?.server_data)
+      ? server.server_data
+      : Array.isArray(server?.episodes)
+        ? server.episodes
+        : [];
 
-    episodes.forEach((episode, episodeIndex) => {
-      out.push({
+    eps.forEach((ep, episodeIndex) => {
+      result.push({
         serverIndex,
         episodeIndex,
         serverName,
-        episode
+        episode: ep
       });
     });
   });
-  return out;
+
+  return result;
 }
 
+/* Home / diagnostics */
 app.get("/", (_req, res) => {
   res.type("html").send(`<!doctype html>
 <html lang="vi">
-<head><meta charset="utf-8"><title>Nuvio PhimAPI Addon v5</title>
+<head>
+<meta charset="utf-8">
+<title>Nuvio PhimAPI Addon v4.1</title>
 <style>
-body{font-family:Arial;background:#0f1117;color:#eee;max-width:900px;margin:40px auto;padding:20px}
-a{color:#70b8ff}li{margin:10px 0}code{background:#1b202b;padding:3px 6px;border-radius:4px}
-</style></head>
+body{font-family:Arial,sans-serif;background:#0f1117;color:#eee;max-width:900px;margin:40px auto;padding:20px}
+a{color:#69b7ff}li{margin:12px 0}
+code{background:#181c25;padding:3px 6px;border-radius:5px}
+</style>
+</head>
 <body>
-<h1>Nuvio PhimAPI Addon v5</h1>
-<p>PhimAPI v1 • poster URL tuyệt đối • pagination 24 phim/trang • Phim Mới/Bộ/Lẻ/Chiếu Rạp/Hoạt Hình.</p>
+<h1>Nuvio PhimAPI Addon v4.1</h1>
+<p>Poster absolute CDN + meta đầy đủ từ KKPhim API.</p>
 <ul>
 <li><a href="/health">Health</a></li>
 <li><a href="/manifest.json">Manifest</a></li>
@@ -299,25 +463,76 @@ a{color:#70b8ff}li{margin:10px 0}code{background:#1b202b;padding:3px 6px;border-
 <li><a href="/catalog/movie/phim-le.json">Phim Lẻ</a></li>
 <li><a href="/catalog/movie/phim-chieu-rap.json">Phim Chiếu Rạp</a></li>
 <li><a href="/catalog/series/hoat-hinh.json">Hoạt Hình</a></li>
-<li><a href="/catalog/movie/search.json?search=avengers">Tìm kiếm</a></li>
+<li><a href="/catalog/movie/search.json?search=avengers">Search test</a></li>
 </ul>
-</body></html>`);
+</body>
+</html>`);
 });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, addon: "vn.starskingit.phimapi", version: ADDON_VERSION });
+  res.json({
+    ok: true,
+    addon: "vn.starskingit.phimapi",
+    version: "4.1.0",
+    publicUrl: PUBLIC_URL || null
+  });
 });
 
+/*
+ * Poster proxy (optional).
+ * Supports: phimimg.com, phimapi.com, img.phimapi.com, image.tmdb.org
+ */
+app.get("/image", async (req, res) => {
+  try {
+    const target = String(req.query.url || "");
+    if (!/^https?:\/\//i.test(target)) {
+      return res.status(400).end();
+    }
+
+    const u = new URL(target);
+    const host = u.hostname.toLowerCase();
+
+    const allowed = [...ALLOWED_IMAGE_HOSTS].some(
+      domain => host === domain || host.endsWith(`.${domain}`)
+    );
+
+    if (!allowed) return res.status(403).end();
+
+    const r = await fetch(target, {
+      headers: {
+        accept:
+          "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "user-agent": "Mozilla/5.0"
+      }
+    });
+
+    if (!r.ok) return res.status(r.status).end();
+
+    const contentType = r.headers.get("content-type") || "image/jpeg";
+    const body = Buffer.from(await r.arrayBuffer());
+
+    res.set("Content-Type", contentType);
+    res.set("Cache-Control", "public, max-age=86400, s-maxage=86400");
+    res.send(body);
+  } catch (e) {
+    console.error("IMAGE ERROR", e);
+    res.status(502).end();
+  }
+});
+
+/* Manifest */
 app.get("/manifest.json", (_req, res) => {
   res.json({
     id: "vn.starskingit.phimapi",
-    version: ADDON_VERSION,
-    name: "KKPhim • PhimAPI v5",
-    description: "Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình",
+    version: "4.1.0",
+    name: "KKPhim • PhimAPI",
+    description:
+      "Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — API v1 (poster CDN + meta đầy đủ).",
     logo: "https://www.google.com/s2/favicons?domain=phimapi.com&sz=128",
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series"],
     idPrefixes: ["phimapi:"],
+
     catalogs: CATALOGS.map(c => ({
       type: c.type,
       id: c.id,
@@ -330,16 +545,22 @@ app.get("/manifest.json", (_req, res) => {
   });
 });
 
+/* Search */
 app.get("/catalog/:type/search.json", async (req, res) => {
   try {
     const keyword = String(req.query.search || "").trim();
-    if (!keyword) return res.json({ metas: [] });
 
-    const page = getClientPage(req.query);
+    if (!keyword) {
+      return res.json({ metas: [] });
+    }
+
+    const page = pageFromQuery(req.query);
+    const limit = num(req.query.limit, 64, 1, 64);
+
     const params = new URLSearchParams({
       keyword,
       page: String(page),
-      limit: String(PAGE_SIZE)
+      limit: String(limit)
     });
 
     for (const key of [
@@ -355,195 +576,258 @@ app.get("/catalog/:type/search.json", async (req, res) => {
       }
     }
 
-    const payload = await fetchJson(`/v1/api/tim-kiem?${params.toString()}`);
-    const base = imageBaseOf(payload);
-    const baseUrl = getBaseUrl(req);
+    const data = await fetchJson(`/v1/api/tim-kiem?${params.toString()}`);
+    const items = listItems(data);
+    const base = imageBase(data);
 
-    const metas = itemsOf(payload)
-      .map(item => metaCard(item, req.params.type, base, baseUrl))
+    const metas = items
+      .map(item => metaFromItem(item, req.params.type, base, req))
       .filter(Boolean);
 
     res.set("Cache-Control", "public, max-age=60, s-maxage=60");
     res.json({ metas });
-  } catch (error) {
-    console.error("SEARCH ERROR:", error);
-    res.status(502).json({ metas: [] });
+  } catch (e) {
+    console.error("SEARCH ERROR", e);
+    res.status(502).json({ metas: [], error: e.message });
   }
 });
 
+/* Catalog */
 app.get("/catalog/:type/:id.json", async (req, res) => {
   try {
     const catalog = CATALOGS.find(
       c => c.id === req.params.id && c.type === req.params.type
     );
 
-    if (!catalog) return res.status(404).json({ metas: [] });
-
-    const result = await catalogPayload(catalog, req.query);
-    const baseUrl = getBaseUrl(req);
-
-    let metas = result.items
-      .map(item => metaCard(item, catalog.type, result.base, baseUrl))
-      .filter(Boolean);
-
-    // Nuvio expects catalog cards to match the catalog type.
-    // The home endpoint is mixed, so keep only movie cards there.
-    if (catalog.id === "phim-moi") {
-      metas = metas.filter(m => m.type === "movie");
+    if (!catalog) {
+      return res.status(404).json({ metas: [] });
     }
 
-    res.set("Cache-Control", "no-store");
+    const { items, base, pagination, pagesLoaded } = await getCatalogItems(
+      catalog,
+      req.query
+    );
+
+    const metas = items
+      .map(item => metaFromItem(item, catalog.type, base, req))
+      .filter(Boolean);
+
+    res.set("Cache-Control", "public, max-age=60, s-maxage=60");
+
     res.json({
       metas,
-      // Kept for diagnostics; ignored by Nuvio.
-      pagination: result.pagination,
-      upstreamPage: result.page
+      pagination,
+      pagesLoaded
     });
-  } catch (error) {
-    console.error("CATALOG ERROR:", error);
-    res.status(502).json({ metas: [] });
+  } catch (e) {
+    console.error("CATALOG ERROR", e);
+    res.status(502).json({
+      metas: [],
+      error: e.message
+    });
   }
 });
 
+/* Meta — đầy đủ thông tin từ API */
 app.get("/meta/:type/:id.json", async (req, res) => {
   try {
     const rawId = decodeURIComponent(req.params.id);
     const slug = rawId.replace(/^phimapi:/, "");
 
-    const [{ raw, item }, images] = await Promise.all([
-      movieDetail(slug),
-      movieImages(slug)
+    const [{ raw, item, base: detailBase }, images] = await Promise.all([
+      getMovie(slug),
+      getMovieImages(slug)
     ]);
 
-    if (!item) return res.status(404).json({ meta: null });
+    if (!item) {
+      return res.status(404).json({ meta: null });
+    }
 
-    const base =
-      raw?.pathImage ||
-      dataRoot(raw)?.pathImage ||
-      "https://phimapi.com/uploads/movies/";
+    const base = detailBase || imageBase(raw) || DEFAULT_CDN;
 
-    const baseUrl = getBaseUrl(req);
-    const directPoster =
-      tmdbPoster(images) ||
-      choosePoster(item, base, baseUrl);
-    const directBackground =
-      tmdbBackdrop(images) ||
-      chooseBackground(item, base);
+    const tmdbPoster = extractTMDBPoster(images);
+    const tmdbBackdrop = extractTMDBBackdrop(images);
+
+    // Prefer TMDB HD if available, else API poster (already absolute on detail)
+    const poster =
+      tmdbPoster ||
+      absoluteImage(item.poster_url || item.poster, base) ||
+      posterFor(item, base, req);
+
+    const background =
+      tmdbBackdrop ||
+      absoluteImage(item.thumb_url || item.thumb, base) ||
+      backgroundFor(item, base, req);
+
+    const type = typeForItem(item, req.params.type);
+
+    const imdbScore =
+      item?.imdb?.vote_average || item?.tmdb?.vote_average || null;
+
+    const genres = namesOf(item.category);
+    const countries = namesOf(item.country);
+    const directors = namesOf(
+      Array.isArray(item.director) ? item.director : item.director ? [item.director] : []
+    );
+    const actors = namesOf(
+      Array.isArray(item.actor) ? item.actor : item.actor ? [item.actor] : []
+    );
 
     const meta = {
       id: `phimapi:${item.slug || slug}`,
-      type: itemType(item, req.params.type),
+      type,
       name: item.name || item.origin_name || slug,
-      poster: directPoster,
-      background: directBackground || undefined,
-      posterShape: "poster",
-      description: item.content || item.description || item.origin_name || undefined
+      poster,
+      background,
+      posterShape: "poster"
     };
 
-    if (item.year) meta.year = Number(item.year);
+    if (item.origin_name && item.origin_name !== item.name) {
+      meta.originalTitle = item.origin_name;
+    }
 
-    if (Array.isArray(item.category)) {
-      meta.genres = item.category
-        .map(x => x?.name || x?.slug)
-        .filter(Boolean);
+    const desc = stripHtml(item.content || item.description);
+    if (desc) meta.description = desc;
+
+    if (item.year) meta.year = Number(item.year);
+    if (genres.length) meta.genres = genres;
+    if (imdbScore) meta.imdbRating = String(Number(imdbScore).toFixed(1));
+    if (item.imdb?.id) meta.imdb_id = item.imdb.id;
+    if (directors.length) meta.director = directors;
+    if (actors.length) meta.cast = actors.slice(0, 15);
+    if (item.time) meta.runtime = String(item.time);
+    if (countries.length) meta.country = countries.join(", ");
+    if (item.trailer_url) meta.trailers = [{ source: item.trailer_url, type: "Trailer" }];
+
+    // Extra info block
+    const extras = [];
+    if (item.quality) extras.push(`Chất lượng: ${item.quality}`);
+    if (item.lang) extras.push(`Ngôn ngữ: ${item.lang}`);
+    if (item.episode_current) extras.push(`Tập: ${item.episode_current}`);
+    if (item.episode_total) extras.push(`Tổng: ${item.episode_total}`);
+    if (item.view) extras.push(`Lượt xem: ${item.view}`);
+    if (extras.length) {
+      meta.description = [meta.description, extras.join(" • ")]
+        .filter(Boolean)
+        .join("\n\n");
     }
 
     const eps = episodeEntries(item);
-    meta.videos = eps.map((entry, i) => ({
-      id: `phimapi:${slug}:s${entry.serverIndex}:e${entry.episodeIndex}`,
-      title: `${entry.serverName} — ${entry.episode?.name || `Tập ${i + 1}`}`,
-      season: Number(entry.episode?.season || 1),
-      episode: Number(
-        entry.episode?.episode ||
-        entry.episode?.episode_number ||
-        i + 1
-      )
-    }));
 
-    res.set("Cache-Control", "no-store");
+    if (type === "series" || eps.length > 1) {
+      meta.videos = eps.map((x, i) => ({
+        id: `phimapi:${slug}:s${x.serverIndex}:e${x.episodeIndex}`,
+        title: `${x.serverName} — ${x.episode?.name || `Tập ${i + 1}`}`,
+        season: Number(x.episode?.season || 1),
+        episode: Number(
+          x.episode?.episode ||
+            x.episode?.episode_number ||
+            i + 1
+        ),
+        released: item.year ? `${item.year}-01-01T00:00:00.000Z` : undefined
+      }));
+    } else if (eps.length === 1) {
+      // Movie single: still expose one video id so stream works consistently
+      const x = eps[0];
+      meta.videos = [
+        {
+          id: `phimapi:${slug}:s${x.serverIndex}:e${x.episodeIndex}`,
+          title: x.episode?.name || "Full",
+          season: 1,
+          episode: 1
+        }
+      ];
+    }
+
+    res.set("Cache-Control", "public, max-age=300, s-maxage=300");
     res.json({ meta });
-  } catch (error) {
-    console.error("META ERROR:", error);
-    res.status(502).json({ meta: null });
+  } catch (e) {
+    console.error("META ERROR", e);
+    res.status(502).json({
+      meta: null,
+      error: e.message
+    });
   }
 });
 
+/* Stream — movie (no :s:e) + series episode */
 app.get("/stream/:type/:id.json", async (req, res) => {
   try {
     const rawId = decodeURIComponent(req.params.id);
-    const match = rawId.match(/^phimapi:(.+):s(\d+):e(\d+)$/);
-    if (!match) return res.json({ streams: [] });
 
-    const slug = match[1];
-    const serverIndex = Number(match[2]);
-    const episodeIndex = Number(match[3]);
+    let slug;
+    let serverIndex = 0;
+    let episodeIndex = 0;
+    let hasEpisode = false;
 
-    const { item } = await movieDetail(slug);
-    const entry = episodeEntries(item).find(
-      x => x.serverIndex === serverIndex && x.episodeIndex === episodeIndex
-    );
-
-    if (!entry?.episode) return res.json({ streams: [] });
-
-    const ep = entry.episode;
-    const title = `${item?.name || slug} — ${ep.name || `Tập ${episodeIndex + 1}`}`;
-
-    const streams = [];
-    if (ep.link_m3u8) {
-      streams.push({
-        name: `PhimAPI • ${entry.serverName}`,
-        title,
-        url: ep.link_m3u8,
-        behaviorHints: { bingeGroup: `phimapi-${slug}-${serverIndex}` }
-      });
+    const m = rawId.match(/^phimapi:(.+):s(\d+):e(\d+)$/);
+    if (m) {
+      slug = m[1];
+      serverIndex = Number(m[2]);
+      episodeIndex = Number(m[3]);
+      hasEpisode = true;
+    } else if (rawId.startsWith("phimapi:")) {
+      slug = rawId.replace(/^phimapi:/, "");
+    } else {
+      return res.json({ streams: [] });
     }
-    if (ep.link_embed) {
-      streams.push({
-        name: `PhimAPI Embed • ${entry.serverName}`,
-        title,
-        externalUrl: ep.link_embed
-      });
+
+    const { item } = await getMovie(slug);
+    if (!item) return res.json({ streams: [] });
+
+    const entries = episodeEntries(item);
+    const streams = [];
+
+    const pushStream = (entry) => {
+      const ep = entry.episode;
+      if (!ep) return;
+
+      const title =
+        `${item.name || slug} — ${ep.name || `Tập ${entry.episodeIndex + 1}`}`;
+
+      if (ep.link_m3u8) {
+        streams.push({
+          name: `PhimAPI • ${entry.serverName}`,
+          title,
+          url: ep.link_m3u8,
+          behaviorHints: {
+            bingeGroup: `phimapi-${slug}-${entry.serverIndex}`
+          }
+        });
+      }
+
+      if (ep.link_embed) {
+        streams.push({
+          name: `PhimAPI Embed • ${entry.serverName}`,
+          title,
+          externalUrl: ep.link_embed
+        });
+      }
+    };
+
+    if (hasEpisode) {
+      const entry = entries.find(
+        x =>
+          x.serverIndex === serverIndex &&
+          x.episodeIndex === episodeIndex
+      );
+      if (entry) pushStream(entry);
+    } else {
+      // Movie / all servers first episode
+      entries.forEach(pushStream);
     }
 
     res.json({ streams });
-  } catch (error) {
-    console.error("STREAM ERROR:", error);
-    res.status(502).json({ streams: [] });
-  }
-});
-
-// Optional absolute image proxy. Catalogs use direct poster_url first.
-// Nuvio can use this endpoint manually if a CDN blocks direct image access.
-app.get("/image", async (req, res) => {
-  try {
-    const target = String(req.query.url || "");
-    if (!/^https?:\/\//i.test(target)) return res.status(400).end();
-
-    const u = new URL(target);
-    const host = u.hostname.toLowerCase();
-    const allowed = [...IMAGE_HOSTS].some(
-      domain => host === domain || host.endsWith(`.${domain}`)
-    );
-    if (!allowed) return res.status(403).end();
-
-    const upstream = await fetch(target, {
-      headers: {
-        accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        "user-agent": "Mozilla/5.0 Nuvio-PhimAPI-Addon/5.0"
-      }
+  } catch (e) {
+    console.error("STREAM ERROR", e);
+    res.status(502).json({
+      streams: [],
+      error: e.message
     });
-
-    if (!upstream.ok) return res.status(upstream.status).end();
-
-    res.set("Content-Type", upstream.headers.get("content-type") || "image/jpeg");
-    res.set("Cache-Control", "public, max-age=86400, s-maxage=86400");
-    res.send(Buffer.from(await upstream.arrayBuffer()));
-  } catch (error) {
-    console.error("IMAGE PROXY ERROR:", error);
-    res.status(502).end();
   }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Nuvio PhimAPI v${ADDON_VERSION} listening on ${PORT}`);
+  console.log(`Nuvio PhimAPI v4.1 listening on ${PORT}`);
+  if (PUBLIC_URL) console.log(`PUBLIC_URL=${PUBLIC_URL}`);
 });

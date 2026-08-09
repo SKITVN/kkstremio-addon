@@ -2,7 +2,6 @@ services:
   - type: web
     name: nuvio-phimapi-addon
     runtime: node
-    plan: free
     buildCommand: npm install
     startCommand: npm start
-    autoDeploy: true
+    healthCheckPath: /health
