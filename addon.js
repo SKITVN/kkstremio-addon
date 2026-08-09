@@ -43,7 +43,7 @@ const CATALOGS = [
 
 const manifest = {
   id: "community.kkphim",
-  version: "1.2.0",
+  version: "1.3.0",
   name: "KKPhim",
   description: "Catalog, metadata và stream từ API KKPhim/PhimAPI.",
   logo: "https://kkphim.com/favicon.ico",
@@ -54,7 +54,7 @@ const manifest = {
   ],
   types: ["movie", "series"],
   idPrefixes: ["kkp:"],
-  catalogs: CATALOGS,
+  catalogs: CATALOGS.map(c => c.extra ? c : { ...c, extra: [{ name: "skip" }] }),
   behaviorHints: {
     configurable: false
   }
@@ -218,21 +218,25 @@ async function mapWithConcurrency(items, limit, fn) {
 
 function listConfig(catalogId) {
   switch (catalogId) {
-    case "series": return { path: "/danh-sach/phim-bo" };
-    case "movies": return { path: "/danh-sach/phim-le" };
-    case "animation-movie": return { path: "/danh-sach/hoat-hinh", type: "movie" };
-    case "animation-series": return { path: "/danh-sach/hoat-hinh", type: "series" };
-    case "donghua-movie": return { path: "/v1/api/danh-sach", country: "trung-quoc", category: "hoat-hinh", type: "movie" };
-    case "donghua-series": return { path: "/v1/api/danh-sach", country: "trung-quoc", category: "hoat-hinh", type: "series" };
-    case "theater": return { path: "/danh-sach/phim-chieu-rap" };
-    case "vietsub-movie": return { path: "/v1/api/danh-sach", sort_lang: "vietsub", type: "movie" };
-    case "vietsub-series": return { path: "/v1/api/danh-sach", sort_lang: "vietsub", type: "series" };
-    case "thuyet-minh-movie": return { path: "/v1/api/danh-sach", sort_lang: "thuyet-minh", type: "movie" };
-    case "thuyet-minh-series": return { path: "/v1/api/danh-sach", sort_lang: "thuyet-minh", type: "series" };
-    case "long-tieng-movie": return { path: "/v1/api/danh-sach", sort_lang: "long-tieng", type: "movie" };
-    case "long-tieng-series": return { path: "/v1/api/danh-sach", sort_lang: "long-tieng", type: "series" };
+    // Use the current v1 endpoints. The legacy /danh-sach/{type}
+    // currently exposes only a small subset (for example, the docs show
+    // phim-bo with 16 items), which is why the previous addon appeared
+    // to have very few movies.
+    case "series": return { path: "/v1/api/danh-sach/phim-bo", expected: "series" };
+    case "movies": return { path: "/v1/api/danh-sach/phim-le", expected: "movie" };
+    case "animation-movie": return { path: "/v1/api/danh-sach/hoat-hinh", expected: "movie" };
+    case "animation-series": return { path: "/v1/api/danh-sach/hoat-hinh", expected: "series" };
+    case "donghua-movie": return { path: "/v1/api/danh-sach/hoat-hinh", country: "trung-quoc", expected: "movie" };
+    case "donghua-series": return { path: "/v1/api/danh-sach/hoat-hinh", country: "trung-quoc", expected: "series" };
+    case "theater": return { path: "/v1/api/danh-sach/phim-chieu-rap", expected: "movie" };
+    case "vietsub-movie": return { path: "/v1/api/danh-sach", sort_lang: "vietsub", expected: "movie" };
+    case "vietsub-series": return { path: "/v1/api/danh-sach", sort_lang: "vietsub", expected: "series" };
+    case "thuyet-minh-movie": return { path: "/v1/api/danh-sach", sort_lang: "thuyet-minh", expected: "movie" };
+    case "thuyet-minh-series": return { path: "/v1/api/danh-sach", sort_lang: "thuyet-minh", expected: "series" };
+    case "long-tieng-movie": return { path: "/v1/api/danh-sach", sort_lang: "long-tieng", expected: "movie" };
+    case "long-tieng-series": return { path: "/v1/api/danh-sach", sort_lang: "long-tieng", expected: "series" };
     case "new":
-    default: return { path: "/v1/api/home" };
+    default: return { path: "/v1/api/danh-sach" };
   }
 }
 
@@ -281,7 +285,7 @@ builder.defineCatalogHandler(async (args) => {
     });
 
     const filtered = unwrapItems(data)
-      .filter((item) => !cfg.type || contentType(item) === cfg.type)
+      .filter((item) => !cfg.expected || contentType(item) === cfg.expected)
       .filter((item) => contentType(item) === args.type);
 
     const metas = await mapWithConcurrency(
