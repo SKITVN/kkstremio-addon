@@ -1,64 +1,53 @@
-# Nuvio PhimAPI Addon — Render
+# Nuvio PhimAPI Addon v2
 
-Bản này đã được đóng gói để deploy trực tiếp trên **Render**.
+Bản sửa hoàn chỉnh cho Render/Nuvio.
 
-## Sửa lỗi Render
+## Đã sửa
 
-Không còn:
+- Phim Bộ dùng `type: series` và endpoint riêng.
+- Phim Lẻ dùng `type: movie`.
+- Hoạt Hình dùng `type: series`.
+- Poster lấy trực tiếp từ `poster_url`; nếu API trả filename thì ghép với `pathImage`.
+- Có fallback API legacy nếu endpoint v1 không trả dữ liệu.
+- Có metadata và danh sách tập.
+- Có stream `link_m3u8` và fallback `link_embed`.
+- Render chạy bằng duy nhất `server.js`, không phụ thuộc `api/index.js`.
 
-```text
-Cannot find module './api/index'
-```
+## Render
 
-Toàn bộ server nằm trong `server.js`, nên Render chỉ cần chạy:
-
-```text
-npm start
-```
-
-## Deploy Render
-
-- Build Command:
+Build:
 ```text
 npm install
 ```
 
-- Start Command:
+Start:
 ```text
 npm start
 ```
 
-Không cần Root Directory khác. Đặt repository root là nơi chứa `server.js` và `package.json`.
+Health:
+```text
+/health
+```
 
-Sau khi deploy:
+Manifest:
+```text
+/manifest.json
+```
+
+Sau khi deploy, dùng:
 
 ```text
 https://TEN-SERVICE.onrender.com/manifest.json
 ```
 
-## Catalog
+### Quan trọng khi cập nhật
 
-- Phim Mới
-- Phim Bộ
-- Phim Lẻ
-- Phim Chiếu Rạp
-- Hoạt Hình
+Nuvio lưu manifest/catalog đã cài. Sau khi deploy bản mới:
 
-## Stream
+1. Xóa addon cũ khỏi Nuvio.
+2. Thêm lại URL `/manifest.json`.
+3. Nếu Render Free đang sleep, mở `/health` trước để đánh thức service.
+4. Sau đó mở lại Nuvio.
 
-Addon có resource `stream`.
-
-PhimAPI trả `link_m3u8` thì addon trả URL HLS trực tiếp cho Nuvio/Stremio.
-
-Nếu không có `link_m3u8`, addon trả `link_embed` dưới dạng `externalUrl`.
-
-## Test
-
-```text
-/health
-/manifest.json
-/catalog/movie/phim-le.json
-/catalog/series/phim-bo.json
-```
-
-Nguồn dữ liệu: phimapi.com.
+PhimAPI API v1 cung cấp `poster_url`, `thumb_url`, danh sách phim trong `data.items`, và episode trong `data.item.episodes`; episode có `link_m3u8`/`link_embed`.
