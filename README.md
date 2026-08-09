@@ -1,25 +1,71 @@
-# Nuvio PhimAPI Addon v3
+# Nuvio PhimAPI Addon v4
 
-Bản này sửa ba lỗi chính của các bản trước:
+Bản này sử dụng đúng tài liệu API KKPhim/PhimAPI trong các ảnh người dùng cung cấp.
 
-1. **Poster không hiện**
-   - API trả `poster_url`/`thumb_url` từ nhiều CDN khác nhau.
-   - Addon có `/image` proxy để Nuvio lấy ảnh thông qua chính server Render.
+## API đã tích hợp
 
-2. **Phim Bộ không hiện**
-   - Dùng đúng endpoint:
-     `/danh-sach/phim-bo`
-   - Catalog khai báo đúng `type: series`.
+### Catalog
+- Phim Mới: `GET /v1/api/danh-sach?page=1`
+- Phim Bộ: `GET /v1/api/danh-sach/phim-bo?page=1`
+- Phim Lẻ: `GET /v1/api/danh-sach/phim-le?page=1`
+- Phim Chiếu Rạp: `GET /v1/api/danh-sach/phim-chieu-rap?page=1`
+- Hoạt Hình: `GET /v1/api/danh-sach/hoat-hinh?page=1`
 
-3. **Mất Phim Mới / Phim Lẻ / Phim Chiếu Rạp**
-   - Dùng đúng các endpoint danh sách:
-     - `/danh-sach/phim-moi-cap-nhat`
-     - `/danh-sach/phim-bo`
-     - `/danh-sach/phim-le`
-     - `/danh-sach/phim-chieu-rap`
-     - `/danh-sach/hoat-hinh`
+### Bộ lọc
+Addon nhận và chuyển tiếp:
+- `page`
+- `limit`
+- `category`
+- `country`
+- `year`
+- `sort_field`
+- `sort_type`
+- `sort_lang`
 
-Các endpoint danh sách cũ của PhimAPI hỗ trợ `page` và trả `items`, `poster_url`, `thumb_url`, `slug`; tài liệu PhimAPI cũng xác nhận `phim-bo`, `phim-le`, `hoat-hinh`, `tv-shows`, `phim-chieu-rap` là các loại hợp lệ. citeturn2search0
+### Tìm kiếm
+`GET /v1/api/tim-kiem?keyword=...&limit=64`
+
+### Chi tiết
+`GET /v1/api/phim/{slug}`
+
+### Hình ảnh
+`GET /v1/api/phim/{slug}/images`
+
+Addon ưu tiên ảnh TMDB từ endpoint `/images`, sau đó fallback về
+`poster_url` / `thumb_url` của danh sách.
+
+### Stream
+Đọc `episodes`, `server_data`, `link_m3u8`, `link_embed`.
+
+## Vì sao bản này nhiều phim hơn
+
+API danh sách trả mặc định 24 phim/trang. Nuvio thường chỉ gọi một trang catalog.
+
+Addon v4 mặc định tải **3 trang API** cho mỗi lần gọi catalog và gộp lại thành một danh sách. Có thể đổi bằng:
+
+```text
+?pages=1
+?pages=3
+?pages=5
+```
+
+Giới hạn 5 trang để tránh tạo request quá nặng.
+
+## Poster
+
+Tất cả poster/background được đi qua:
+
+```text
+/image?url=...
+```
+
+Proxy hỗ trợ:
+- phimapi.com
+- phimimg.com
+- img.phimapi.com
+- image.tmdb.org
+
+Điều này xử lý trường hợp Nuvio/Stremio không tải trực tiếp được CDN poster.
 
 ## Render
 
@@ -35,21 +81,23 @@ Start Command:
 npm start
 ```
 
-Không cần thư mục `api`.
-
-## Test sau deploy
-
-Thay `TEN-SERVICE` bằng tên Render của bạn:
+Health Check:
 
 ```text
-https://TEN-SERVICE.onrender.com/health
+/health
 ```
+
+Không dùng `api/index.js`.
+
+## Sau khi deploy
+
+Ví dụ:
 
 ```text
 https://TEN-SERVICE.onrender.com/manifest.json
 ```
 
-Catalog:
+Test:
 
 ```text
 https://TEN-SERVICE.onrender.com/catalog/movie/phim-moi.json
@@ -59,14 +107,14 @@ https://TEN-SERVICE.onrender.com/catalog/movie/phim-chieu-rap.json
 https://TEN-SERVICE.onrender.com/catalog/series/hoat-hinh.json
 ```
 
-## Quan trọng
+Search:
 
-Sau khi deploy bản v3:
+```text
+https://TEN-SERVICE.onrender.com/catalog/movie/search.json?search=avengers
+```
 
-1. Vào Nuvio.
-2. Xóa addon PhimAPI cũ.
-3. Thêm lại URL:
-   `https://TEN-SERVICE.onrender.com/manifest.json`
-4. Chờ Render thức dậy nếu đang dùng Free instance.
+Sau khi deploy bản v4, xóa addon cũ khỏi Nuvio rồi cài lại:
 
-Không dùng manifest cũ đã cache trong Nuvio.
+```text
+https://TEN-SERVICE.onrender.com/manifest.json
+```
