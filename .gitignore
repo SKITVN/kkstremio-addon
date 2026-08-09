@@ -1,8 +1,4 @@
 node_modules/
-npm-debug.log*
 .env
-.env.*
+npm-debug.log*
 .DS_Store
-.vscode/
-.idea/
-coverage/

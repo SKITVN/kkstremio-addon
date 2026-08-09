@@ -1,13 +1,6 @@
 const { serveHTTP } = require("stremio-addon-sdk");
-const addonInterface = require("./addon");
+const { builder } = require("./addon");
 
 const port = Number(process.env.PORT || 7000);
-const host = process.env.HOST || "0.0.0.0";
-
-serveHTTP(addonInterface, {
-  port,
-  host,
-  cache: "1d"
-});
-
-console.log(`KKPhim Stremio addon listening on ${host}:${port}`);
+serveHTTP(builder.getInterface(), { port, cache: "1h" });
+console.log(`KKPhim Stremio addon listening on ${port}`);
