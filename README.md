@@ -1,42 +1,32 @@
-# Nuvio PhimAPI Addon v4.3
+# Nuvio / Stremio KKPhim Addon v4.5
 
-Addon **Nuvio / Stremio** dùng [PhimAPI (KKPhim)](https://phimapi.com).
-
-## v4.3 — Infinite scroll
-
-**Lỗi:** client dừng load khi nhận **< 100** phim (chuẩn Stremio). API chỉ trả 24/trang → coi như hết catalog.
-
-**Sửa:**
-- Mỗi request trả **~100 phim** (gộp ~5 trang API)
-- Đọc `skip` từ **query** (`?skip=100`) **và path** (`/catalog/movie/phim-le/skip=100.json`)
-- Map `skip` → đúng trang API, không trùng / nhảy trang
+Addon dùng API KKPhim/PhimAPI.
 
 ## Catalog
+- Phim Mới
+- Phim Bộ
+- Phim Lẻ
+- Phim Chiếu Rạp
+- Hoạt Hình
 
-| Catalog | Type | API |
-|---------|------|-----|
-| Phim Mới | movie | phim-moi-cap-nhat |
-| Phim Bộ | series | phim-bo |
-| Phim Lẻ | movie | phim-le |
-| Phim Chiếu Rạp | movie | phim-chieu-rap |
-| Hoạt Hình | series | hoat-hinh |
+## Bộ lọc trong từng catalog
+Bộ chọn `genre` gồm:
+- Quốc gia • Hàn Quốc
+- Quốc gia • Trung Quốc
+- Quốc gia • Âu Mỹ
+- Năm • 2027, 2026, 2025... đến 1970
+- Các thể loại phim hiện có
 
-> Phim Bộ / Hoạt Hình nằm trong tab **Series**.
+Addon tự map lựa chọn sang tham số API `country`, `year` hoặc `category`.
 
 ## Deploy Render
-
-1. Push GitHub → Render deploy
-2. Manifest: `https://YOUR-APP.onrender.com/manifest.json`
-3. **Gỡ addon cũ trong Nuvio → cài lại** (xóa cache)
+1. Upload toàn bộ file trong ZIP lên repo GitHub.
+2. Render deploy lại repo.
+3. Mở `/manifest.json` để kiểm tra version `4.5.0`.
+4. Gỡ addon cũ khỏi Nuvio/Stremio rồi cài lại manifest để tránh cache manifest cũ.
 
 ## Local
-
 ```bash
-npm install && npm start
+npm install
+npm start
 ```
-
-http://localhost:10000/manifest.json
-
-## License
-
-MIT
