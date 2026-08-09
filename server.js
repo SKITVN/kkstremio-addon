@@ -273,12 +273,12 @@ function episodeEntries(item) {
   return out;
 }
 
-app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.9</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.9</h1><p>Bản tối ưu Nuvio: catalog gốc lọc Thể loại; mỗi quốc gia có một catalog lọc Thể loại và một catalog riêng 'Theo năm' để lọc Năm phát hành.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
-app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.9.0', publicUrl:PUBLIC_URL || null }));
+app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v5.0</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v5.0</h1><p>Bản tối ưu Nuvio: catalog gốc lọc Thể loại; mỗi quốc gia có một catalog lọc Thể loại và một catalog riêng 'Theo năm' để lọc Năm phát hành.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
+app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'5.0.0', publicUrl:PUBLIC_URL || null }));
 
 app.get('/manifest.json', (_req,res) => res.json({
-  id:'vn.starskingit.phimapi', version:'4.9.0', name:'KKPhim • PhimAPI',
-  description:'Bản tối ưu cho Nuvio: giữ đầy đủ Thể loại. Mỗi quốc gia Hàn Quốc / Trung Quốc / Âu Mỹ có catalog lọc Thể loại và catalog Theo năm riêng, phù hợp giới hạn một selector genre của Nuvio.',
+  id:'vn.starskingit.phimapi', version:'5.0.0', name:'KKPhim • PhimAPI',
+  description:'Bản tối ưu cho Nuvio: giữ đầy đủ Thể loại/Quốc gia/Năm; phim bộ gộp tập trùng giữa các server và đặt tập mới nhất làm tập mặc định.',
   logo:'https://www.google.com/s2/favicons?domain=phimapi.com&sz=128',
   resources:['catalog','meta','stream'], types:['movie','series'], idPrefixes:['phimapi:'],
   catalogs: CATALOGS.map(c => ({
@@ -340,7 +340,24 @@ app.get('/meta/:type/:id.json', async (req,res) => {
     if(item.time)meta.runtime=String(item.time);
     const score=item?.imdb?.vote_average||item?.tmdb?.vote_average; if(score)meta.imdbRating=String(Number(score).toFixed(1));
     const eps=episodeEntries(item);
-    if(eps.length) meta.videos=eps.map((x,i)=>({ id:`phimapi:${slug}:s${x.serverIndex}:e${x.episodeIndex}`, title:`${x.serverName} — ${x.episode?.name||`Tập ${i+1}`}`, season:Number(x.episode?.season||1), episode:Number(x.episode?.episode||x.episode?.episode_number||i+1), released:item.year?`${item.year}-01-01T00:00:00.000Z`:undefined }));
+    if(eps.length) {
+      // Nuvio: chỉ hiển thị MỘT video cho mỗi tập. Nguồn/server được chọn ở bước stream.
+      // Chọn server có nhiều tập nhất làm danh sách chuẩn để tránh lặp tập 2-4 lần.
+      const byServer=new Map();
+      for(const x of eps){ if(!byServer.has(x.serverIndex))byServer.set(x.serverIndex,[]); byServer.get(x.serverIndex).push(x); }
+      const canonical=[...byServer.values()].sort((a,b)=>b.length-a.length)[0] || [];
+      meta.videos=canonical.map((x,i)=>({
+        id:`phimapi:${slug}:e${x.episodeIndex}`,
+        title:x.episode?.name||`Tập ${i+1}`,
+        season:Number(x.episode?.season||1),
+        episode:Number(x.episode?.episode||x.episode?.episode_number||i+1),
+        released:item.year?`${item.year}-01-01T00:00:00.000Z`:undefined
+      }));
+      // Nuvio >= 0.3.0 hỗ trợ behaviorHints.defaultVideoId cho series.
+      // Đặt tập mới nhất làm mặc định để mở phim bộ nhanh tới tập cuối hiện có.
+      const latest=meta.videos[meta.videos.length-1];
+      if(latest) meta.behaviorHints={...(meta.behaviorHints||{}), defaultVideoId:latest.id};
+    }
     res.set('Cache-Control','public, max-age=300, s-maxage=300'); res.json({meta});
   } catch(e) { console.error('META ERROR',e); res.status(502).json({meta:null,error:e.message}); }
 });
@@ -348,10 +365,20 @@ app.get('/meta/:type/:id.json', async (req,res) => {
 app.get('/stream/:type/:id.json', async (req,res) => {
   try {
     const rawId=decodeURIComponent(req.params.id); let slug,si=0,ei=0;
-    const m=rawId.match(/^phimapi:(.+):s(\d+):e(\d+)$/);
-    if(m){slug=m[1];si=Number(m[2]);ei=Number(m[3]);} else if(rawId.startsWith('phimapi:')) slug=rawId.slice(8); else return res.json({streams:[]});
+    const legacy=rawId.match(/^phimapi:(.+):s(\d+):e(\d+)$/);
+    const canonical=rawId.match(/^phimapi:(.+):e(\d+)$/);
+    if(legacy){slug=legacy[1];si=Number(legacy[2]);ei=Number(legacy[3]);}
+    else if(canonical){slug=canonical[1];ei=Number(canonical[2]);}
+    else if(rawId.startsWith('phimapi:')) slug=rawId.slice(8);
+    else return res.json({streams:[]});
     const {item}=await getMovie(slug); if(!item)return res.json({streams:[]});
-    const entries=episodeEntries(item); const selected=m?entries.filter(x=>x.serverIndex===si&&x.episodeIndex===ei):entries;
+    const entries=episodeEntries(item);
+    // ID mới eN trả tất cả server của đúng tập N; ID cũ sN:eN vẫn tương thích.
+    const selected=legacy
+      ? entries.filter(x=>x.serverIndex===si&&x.episodeIndex===ei)
+      : canonical
+        ? entries.filter(x=>x.episodeIndex===ei)
+        : entries;
     const streams=[];
     for(const x of selected){ const ep=x.episode; if(!ep)continue; const title=`${item.name||slug} — ${ep.name||`Tập ${x.episodeIndex+1}`}`;
       if(ep.link_m3u8)streams.push({name:`PhimAPI • ${x.serverName}`,title,url:ep.link_m3u8,behaviorHints:{bingeGroup:`phimapi-${slug}-${x.serverIndex}`}});
