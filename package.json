@@ -1,8 +1,8 @@
 {
   "name": "nuvio-phimapi-addon",
-  "version": "4.6.0",
+  "version": "4.8.0",
   "private": true,
-  "description": "Nuvio/Stremio KKPhim addon with separate genre, country and release-year catalog filters",
+  "description": "KKPhim addon optimized for Nuvio with country catalogs and year selector",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "engines": { "node": ">=18" },

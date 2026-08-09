@@ -10,13 +10,36 @@ const DEFAULT_CDN = 'https://phimimg.com';
 const API_PAGE_SIZE = 24;
 const CLIENT_PAGE_SIZE = 100;
 
-const CATALOGS = [
+const BASE_CATALOGS = [
   { id: 'phim-moi', name: 'Phim Mới', type: 'movie', slug: 'phim-moi-cap-nhat' },
   { id: 'phim-bo', name: 'Phim Bộ', type: 'series', slug: 'phim-bo' },
   { id: 'phim-le', name: 'Phim Lẻ', type: 'movie', slug: 'phim-le' },
   { id: 'phim-chieu-rap', name: 'Phim Chiếu Rạp', type: 'movie', slug: 'phim-chieu-rap' },
   { id: 'hoat-hinh', name: 'Hoạt Hình', type: 'series', slug: 'hoat-hinh' }
 ];
+
+// Bản tối ưu cho Nuvio: Nuvio render ổn định selector `genre`, nhưng không
+// hiển thị ổn định custom extra `country`/`year`. Vì vậy để có đúng luồng
+// "chọn Quốc gia -> chọn Năm", quốc gia được tách thành catalog con, còn
+// selector `genre` của catalog quốc gia được dùng làm selector Năm phát hành.
+const COUNTRY_PRESETS = [
+  { name: 'Hàn Quốc', slug: 'han-quoc' },
+  { name: 'Trung Quốc', slug: 'trung-quoc' },
+  { name: 'Âu Mỹ', slug: 'au-my' }
+];
+
+// Xếp theo nhóm để giao diện Nuvio dễ đọc: catalog gốc trước, sau đó 3 quốc gia
+// của chính catalog đó. Tổng cộng 20 catalog nhưng luôn nằm cạnh nhau theo nhóm.
+const CATALOGS = BASE_CATALOGS.flatMap(c => [
+  { ...c, filterMode: 'category' },
+  ...COUNTRY_PRESETS.map(country => ({
+    ...c,
+    id: `${c.id}-${country.slug}`,
+    name: `${c.name} · ${country.name}`,
+    presetCountry: country.slug,
+    filterMode: 'year'
+  }))
+]);
 
 const CATEGORIES = [
   ['Hành Động','hanh-dong'],['Tình Cảm','tinh-cam'],['Hài Hước','hai-huoc'],['Cổ Trang','co-trang'],
@@ -29,11 +52,7 @@ const CATEGORIES = [
 ].map(([name, slug]) => ({ name, slug }));
 
 // Quốc gia hiển thị thành bộ lọc riêng trong từng catalog.
-const FEATURED_COUNTRIES = [
-  { name: 'Hàn Quốc', slug: 'han-quoc' },
-  { name: 'Trung Quốc', slug: 'trung-quoc' },
-  { name: 'Âu Mỹ', slug: 'au-my' }
-];
+const FEATURED_COUNTRIES = COUNTRY_PRESETS;
 
 // Giữ tương thích nếu client cũ vẫn gửi extra country trực tiếp.
 const COUNTRIES = [
@@ -85,28 +104,32 @@ function parseExtras(req) {
   return extras;
 }
 
-function normalizeFilters(extras) {
+function normalizeFilters(extras, catalog) {
   let category;
-  let country;
+  let country = catalog?.presetCountry;
   let year;
 
-  // Thể loại là selector riêng.
   if (extras.genre != null && String(extras.genre).trim() !== '') {
     const genre = String(extras.genre).trim();
-    // Tương thích với manifest v4.5 nếu client còn cache giá trị cũ.
-    const oldCountry = genre.match(/^Quốc gia\s*•\s*(.+)$/i);
-    const oldYear = genre.match(/^Năm\s*•\s*(\d{4})$/i);
-    if (oldCountry) country = resolveSlug(FEATURED_COUNTRIES, oldCountry[1]);
-    else if (oldYear) year = oldYear[1];
-    else category = resolveSlug(CATEGORIES, genre);
+    if (catalog?.filterMode === 'year') {
+      const y = genre.replace(/^Năm\s*•?\s*/i, '');
+      if (/^(19|20)\d{2}$/.test(y)) year = y;
+    } else {
+      // Catalog gốc: genre vẫn là Thể loại như trước.
+      const oldCountry = genre.match(/^Quốc gia\s*•\s*(.+)$/i);
+      const oldYear = genre.match(/^Năm\s*•\s*(\d{4})$/i);
+      if (oldCountry) country = resolveSlug(FEATURED_COUNTRIES, oldCountry[1]);
+      else if (oldYear) year = oldYear[1];
+      else category = resolveSlug(CATEGORIES, genre);
+    }
   }
 
-  // Quốc gia và năm là hai selector độc lập nên có thể chọn đồng thời.
+  // Vẫn hỗ trợ URL/API cũ gửi country/year/category trực tiếp.
   if (extras.country != null && String(extras.country).trim() !== '') {
     country = resolveSlug(COUNTRIES, extras.country);
   }
   if (extras.year != null && String(extras.year).trim() !== '') {
-    const y = String(extras.year).trim().replace(/^Năm\s*•\s*/i, '');
+    const y = String(extras.year).trim().replace(/^Năm\s*•?\s*/i, '');
     if (/^(19|20)\d{2}$/.test(y)) year = y;
   }
   if (!category && extras.category) category = resolveSlug(CATEGORIES, extras.category);
@@ -114,9 +137,9 @@ function normalizeFilters(extras) {
   return { category, country, year };
 }
 
-function buildFilterParams(extras, page) {
+function buildFilterParams(extras, page, catalog) {
   const p = new URLSearchParams({ page: String(page), limit: String(API_PAGE_SIZE) });
-  const f = normalizeFilters(extras);
+  const f = normalizeFilters(extras, catalog);
   if (f.category) p.set('category', f.category);
   if (f.country) p.set('country', f.country);
   if (f.year) p.set('year', f.year);
@@ -128,7 +151,7 @@ function buildFilterParams(extras, page) {
 
 async function fetchJson(path) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const r = await fetch(url, { headers: { accept:'application/json', 'user-agent':'Mozilla/5.0 Nuvio-KKPhim-Addon/4.6' } });
+  const r = await fetch(url, { headers: { accept:'application/json', 'user-agent':'Mozilla/5.0 Nuvio-KKPhim-Addon/4.8' } });
   if (!r.ok) throw new Error(`PhimAPI HTTP ${r.status}: ${url}`);
   return r.json();
 }
@@ -200,7 +223,7 @@ async function getCatalogItems(catalog, extras) {
   const pagesNeeded = Math.ceil((offset + CLIENT_PAGE_SIZE) / API_PAGE_SIZE);
   const paths = [];
   for (let i=0; i<pagesNeeded; i++) {
-    const params = buildFilterParams(extras, startPage+i);
+    const params = buildFilterParams(extras, startPage+i, catalog);
     paths.push(`/v1/api/danh-sach/${catalog.slug}?${params}`);
   }
   const responses = await Promise.allSettled(paths.map(fetchJson));
@@ -238,33 +261,37 @@ function episodeEntries(item) {
   return out;
 }
 
-app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.6</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.6</h1><p>5 catalog + poster + infinite scroll + bộ lọc riêng Thể loại / Quốc gia / Năm phát hành.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
-app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.6.0', publicUrl:PUBLIC_URL || null }));
+app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.8</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.8</h1><p>Bản tối ưu riêng cho Nuvio: mỗi nhóm phim có catalog gốc + Hàn Quốc / Trung Quốc / Âu Mỹ; vào catalog quốc gia rồi chọn Năm phát hành bằng bộ lọc Nuvio đang hỗ trợ.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
+app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.8.0', publicUrl:PUBLIC_URL || null }));
 
 app.get('/manifest.json', (_req,res) => res.json({
-  id:'vn.starskingit.phimapi', version:'4.6.0', name:'KKPhim • PhimAPI',
-  description:'Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — bộ lọc riêng Thể loại / Quốc gia / Năm phát hành, có thể kết hợp đồng thời.',
+  id:'vn.starskingit.phimapi', version:'4.8.0', name:'KKPhim • PhimAPI',
+  description:'Bản tối ưu riêng cho Nuvio: chọn nhóm phim, chọn catalog quốc gia Hàn Quốc / Trung Quốc / Âu Mỹ, sau đó chọn Năm phát hành bằng bộ lọc genre mà Nuvio hiển thị ổn định.',
   logo:'https://www.google.com/s2/favicons?domain=phimapi.com&sz=128',
   resources:['catalog','meta','stream'], types:['movie','series'], idPrefixes:['phimapi:'],
   catalogs: CATALOGS.map(c => ({
     type:c.type, id:c.id, name:c.name,
     extra:[
       { name:'search', isRequired:false },
-      { name:'genre', isRequired:false, options:GENRE_OPTIONS, optionsLimit:GENRE_OPTIONS.length },
-      { name:'country', isRequired:false, options:COUNTRY_OPTIONS, optionsLimit:COUNTRY_OPTIONS.length },
-      { name:'year', isRequired:false, options:YEAR_OPTIONS, optionsLimit:YEAR_OPTIONS.length },
+      {
+        name:'genre',
+        isRequired:false,
+        options:c.filterMode === 'year' ? YEAR_OPTIONS : GENRE_OPTIONS,
+        optionsLimit:c.filterMode === 'year' ? YEAR_OPTIONS.length : GENRE_OPTIONS.length
+      },
       { name:'skip', isRequired:false }
     ]
   }))
 }));
 
-async function handleSearch(req,res) {
+async function handleSearch(req,res, forcedCatalog=null) {
   try {
+    const catalog = forcedCatalog || (req.params.id ? CATALOGS.find(c=>c.id===req.params.id && c.type===req.params.type) : null);
     const extras=parseExtras(req); const keyword=String(extras.search || extras.keyword || '').trim();
     if (!keyword) return res.json({ metas:[] });
     const skip=num(extras.skip,0,0,1000000); const page=Math.floor(skip/64)+1;
     const params=new URLSearchParams({ keyword, page:String(page), limit:'64' });
-    const f=normalizeFilters(extras); if(f.category)params.set('category',f.category); if(f.country)params.set('country',f.country); if(f.year)params.set('year',f.year);
+    const f=normalizeFilters(extras, catalog); if(f.category)params.set('category',f.category); if(f.country)params.set('country',f.country); if(f.year)params.set('year',f.year);
     const data=await fetchJson(`/v1/api/tim-kiem?${params}`); const base=imageBase(data);
     const metas=listItems(data).map(x=>metaFromItem(x,req.params.type,base)).filter(Boolean);
     res.set('Cache-Control','public, max-age=120, s-maxage=120'); res.json({ metas });
@@ -278,7 +305,7 @@ async function handleCatalog(req,res) {
     const catalog=CATALOGS.find(c=>c.id===req.params.id && c.type===req.params.type);
     if (!catalog) return res.status(404).json({ metas:[] });
     const extras=parseExtras(req);
-    if (extras.search) { req.params.type=catalog.type; return handleSearch(req,res); }
+    if (extras.search) { req.params.type=catalog.type; return handleSearch(req,res,catalog); }
     const {items,base}=await getCatalogItems(catalog,extras);
     const metas=items.map(x=>metaFromItem(x,catalog.type,base)).filter(Boolean);
     res.set('Cache-Control','public, max-age=120, s-maxage=120'); res.json({ metas });

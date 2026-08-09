@@ -1,32 +1,39 @@
-# Nuvio / Stremio KKPhim Addon v4.6
+# KKPhim Addon cho Nuvio v4.8
 
-Addon dùng API KKPhim/PhimAPI.
+Bản này tối ưu riêng cho **Nuvio**.
+
+## Cách lọc trên Nuvio
+Nuvio hiện hiển thị ổn định bộ lọc `genre`, nhưng không hiển thị riêng custom extra `country` và `year`. Vì vậy addon dùng cách sau:
+
+1. Chọn nhóm phim: **Phim Mới / Phim Bộ / Phim Lẻ / Phim Chiếu Rạp / Hoạt Hình**.
+2. Nếu muốn lọc quốc gia, chọn catalog tương ứng, ví dụ **Phim Bộ · Hàn Quốc**.
+3. Trong catalog quốc gia, bộ chọn của Nuvio sẽ hiển thị **năm phát hành**. Chọn ví dụ **2025**.
+4. Addon gọi PhimAPI với đồng thời `country=han-quoc&year=2025`.
 
 ## Catalog
+Mỗi nhóm được xếp liền nhau:
 - Phim Mới
-- Phim Bộ
-- Phim Lẻ
-- Phim Chiếu Rạp
-- Hoạt Hình
+- Phim Mới · Hàn Quốc
+- Phim Mới · Trung Quốc
+- Phim Mới · Âu Mỹ
 
-## Bộ lọc riêng trong từng catalog
-Mỗi catalog khai báo 3 bộ lọc độc lập:
-- `genre`: Thể loại phim
-- `country`: Hàn Quốc / Trung Quốc / Âu Mỹ
-- `year`: Năm phát hành từ năm kế tiếp đến 1970
+Sau đó tương tự cho Phim Bộ, Phim Lẻ, Phim Chiếu Rạp và Hoạt Hình.
 
-Các bộ lọc có thể kết hợp. Ví dụ:
-- Quốc gia = Hàn Quốc
-- Năm = 2025
+Catalog gốc giữ bộ lọc **thể loại**. Catalog quốc gia dùng bộ lọc **năm phát hành**.
 
-Addon sẽ gọi API danh sách với đồng thời `country=han-quoc&year=2025`.
-Có thể kết hợp thêm thể loại, ví dụ `category=hanh-dong&country=han-quoc&year=2025`.
+## Giữ nguyên
+- Poster / background
+- Meta phim
+- Stream M3U8 và embed
+- Phân trang nhiều trang API, trả tối đa 100 phim/lần
+- Tìm kiếm; khi tìm trong catalog quốc gia, preset quốc gia vẫn được giữ
 
-## Deploy Render
-1. Upload toàn bộ file trong ZIP lên repo GitHub.
-2. Render deploy lại repo.
-3. Mở `/manifest.json` để kiểm tra version `4.6.0`.
-4. Gỡ addon cũ khỏi Nuvio/Stremio rồi cài lại manifest để client tải manifest mới.
+## Deploy
+1. Giải nén ZIP.
+2. Upload đè toàn bộ file lên repo GitHub.
+3. Chờ Render deploy lại.
+4. Mở `/manifest.json`, kiểm tra version `4.8.0`.
+5. Gỡ addon KKPhim cũ khỏi Nuvio rồi cài lại manifest để Nuvio tải danh sách catalog mới.
 
 ## Local
 ```bash
