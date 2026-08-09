@@ -20,6 +20,108 @@ const CATALOGS = [
   { id: "hoat-hinh", name: "Hoạt Hình", type: "series", slug: "hoat-hinh" }
 ];
 
+/*
+ * Danh sách Thể loại (category) — lấy từ https://phimapi.com/the-loai
+ * Đặt "Hàn Quốc / Trung Quốc / Mỹ" ưu tiên ở đầu danh sách Quốc gia bên dưới
+ * theo yêu cầu; PhimAPI không có quốc gia "Mỹ" riêng nên dùng "Âu Mỹ" (au-my).
+ */
+const CATEGORIES = [
+  { name: "Hành Động", slug: "hanh-dong" },
+  { name: "Tình Cảm", slug: "tinh-cam" },
+  { name: "Hài Hước", slug: "hai-huoc" },
+  { name: "Cổ Trang", slug: "co-trang" },
+  { name: "Tâm Lý", slug: "tam-ly" },
+  { name: "Hình Sự", slug: "hinh-su" },
+  { name: "Chiến Tranh", slug: "chien-tranh" },
+  { name: "Thể Thao", slug: "the-thao" },
+  { name: "Võ Thuật", slug: "vo-thuat" },
+  { name: "Viễn Tưởng", slug: "vien-tuong" },
+  { name: "Phiêu Lưu", slug: "phieu-luu" },
+  { name: "Khoa Học", slug: "khoa-hoc" },
+  { name: "Kinh Dị", slug: "kinh-di" },
+  { name: "Âm Nhạc", slug: "am-nhac" },
+  { name: "Thần Thoại", slug: "than-thoai" },
+  { name: "Tài Liệu", slug: "tai-lieu" },
+  { name: "Gia Đình", slug: "gia-dinh" },
+  { name: "Chính Kịch", slug: "chinh-kich" },
+  { name: "Bí Ẩn", slug: "bi-an" },
+  { name: "Học Đường", slug: "hoc-duong" },
+  { name: "Kinh Điển", slug: "kinh-dien" },
+  { name: "Miền Tây", slug: "mien-tay" },
+  { name: "Trẻ Em", slug: "tre-em" },
+  { name: "Phim 18+", slug: "phim-18" },
+  { name: "Phim Ngắn", slug: "phim-ngan" },
+  { name: "Lịch Sử", slug: "lich-su" }
+];
+
+/*
+ * Danh sách Quốc gia (country) — lấy từ https://phimapi.com/quoc-gia
+ * Hàn Quốc / Trung Quốc / Mỹ (Âu Mỹ) đặt lên đầu theo yêu cầu.
+ */
+const COUNTRIES = [
+  { name: "Hàn Quốc", slug: "han-quoc" },
+  { name: "Trung Quốc", slug: "trung-quoc" },
+  { name: "Mỹ (Âu Mỹ)", slug: "au-my" },
+  { name: "Việt Nam", slug: "viet-nam" },
+  { name: "Nhật Bản", slug: "nhat-ban" },
+  { name: "Thái Lan", slug: "thai-lan" },
+  { name: "Hồng Kông", slug: "hong-kong" },
+  { name: "Đài Loan", slug: "dai-loan" },
+  { name: "Ấn Độ", slug: "an-do" },
+  { name: "Anh", slug: "anh" },
+  { name: "Pháp", slug: "phap" },
+  { name: "Đức", slug: "duc" },
+  { name: "Canada", slug: "canada" },
+  { name: "Nga", slug: "nga" },
+  { name: "Úc", slug: "uc" },
+  { name: "Tây Ban Nha", slug: "tay-ban-nha" },
+  { name: "Ý", slug: "y" },
+  { name: "Indonesia", slug: "indonesia" },
+  { name: "Philippines", slug: "philippines" },
+  { name: "Malaysia", slug: "malaysia" },
+  { name: "Mexico", slug: "mexico" },
+  { name: "Thổ Nhĩ Kỳ", slug: "tho-nhi-ky" },
+  { name: "Ả Rập Xê Út", slug: "a-rap-xe-ut" },
+  { name: "UAE", slug: "uae" },
+  { name: "Đan Mạch", slug: "dan-mach" },
+  { name: "Thụy Điển", slug: "thuy-dien" },
+  { name: "Thụy Sĩ", slug: "thuy-si" },
+  { name: "Na Uy", slug: "na-uy" },
+  { name: "Hà Lan", slug: "ha-lan" },
+  { name: "Bồ Đào Nha", slug: "bo-dao-nha" },
+  { name: "Ba Lan", slug: "ba-lan" },
+  { name: "Ukraina", slug: "ukraina" },
+  { name: "Brazil", slug: "brazil" },
+  { name: "Nam Phi", slug: "nam-phi" },
+  { name: "Châu Phi", slug: "chau-phi" },
+  { name: "Quốc Gia Khác", slug: "quoc-gia-khac" }
+];
+
+/* Danh sách Năm — từ năm hiện tại lùi về 1970 */
+const CURRENT_YEAR = new Date().getFullYear();
+const YEARS = [];
+for (let y = CURRENT_YEAR + 1; y >= 1970; y--) {
+  YEARS.push(String(y));
+}
+
+/**
+ * Tra slug theo giá trị Stremio gửi lên (có thể là slug hoặc tên hiển thị).
+ */
+function resolveSlug(list, value) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const v = String(value).trim();
+  if (!v) return undefined;
+
+  const bySlug = list.find(x => x.slug === v);
+  if (bySlug) return bySlug.slug;
+
+  const byName = list.find(x => x.name.toLowerCase() === v.toLowerCase());
+  if (byName) return byName.slug;
+
+  // Fallback: pass through as-is (in case PhimAPI adds a new slug we don't know yet)
+  return v;
+}
+
 const ALLOWED_IMAGE_HOSTS = new Set([
   "phimapi.com",
   "phimimg.com",
@@ -74,16 +176,21 @@ function buildFilterParams(extras, page) {
   p.set("page", String(page));
   p.set("limit", String(API_PAGE_SIZE));
 
-  const allowed = [
-    "category",
-    "country",
-    "year",
-    "sort_field",
-    "sort_type",
-    "sort_lang"
-  ];
+  // Stremio gửi extra "genre" (Thể loại) — map sang "category" mà PhimAPI cần.
+  const categorySlug = resolveSlug(CATEGORIES, extras.genre ?? extras.category);
+  if (categorySlug) p.set("category", categorySlug);
 
-  for (const key of allowed) {
+  // Quốc gia (Hàn Quốc / Trung Quốc / Mỹ / ...)
+  const countrySlug = resolveSlug(COUNTRIES, extras.country);
+  if (countrySlug) p.set("country", countrySlug);
+
+  // Theo Năm
+  if (extras.year !== undefined && extras.year !== "") {
+    p.set("year", String(extras.year));
+  }
+
+  const passthrough = ["sort_field", "sort_type", "sort_lang"];
+  for (const key of passthrough) {
     if (extras[key] !== undefined && extras[key] !== "") {
       p.set(key, String(extras[key]));
     }
@@ -531,7 +638,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     addon: "vn.starskingit.phimapi",
-    version: "4.3.0",
+    version: "4.4.0",
     publicUrl: PUBLIC_URL || null
   });
 });
@@ -582,10 +689,10 @@ app.get("/image", async (req, res) => {
 app.get("/manifest.json", (_req, res) => {
   res.json({
     id: "vn.starskingit.phimapi",
-    version: "4.3.0",
+    version: "4.4.0",
     name: "KKPhim • PhimAPI",
     description:
-      "Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — API v1 (poster + infinite scroll).",
+      "Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — API v1 (poster + infinite scroll, lọc theo Thể loại / Quốc gia / Năm).",
     logo: "https://www.google.com/s2/favicons?domain=phimapi.com&sz=128",
     resources: ["catalog", "meta", "stream"],
     types: ["movie", "series"],
@@ -597,6 +704,24 @@ app.get("/manifest.json", (_req, res) => {
       name: c.name,
       extra: [
         { name: "search", isRequired: false },
+        {
+          name: "genre",
+          isRequired: false,
+          options: CATEGORIES.map(x => x.name),
+          optionsLimit: CATEGORIES.length
+        },
+        {
+          name: "country",
+          isRequired: false,
+          options: COUNTRIES.map(x => x.name),
+          optionsLimit: COUNTRIES.length
+        },
+        {
+          name: "year",
+          isRequired: false,
+          options: YEARS,
+          optionsLimit: YEARS.length
+        },
         { name: "skip", isRequired: false }
       ]
     }))
@@ -622,14 +747,17 @@ async function handleSearch(req, res) {
       limit: String(limit)
     });
 
-    for (const key of [
-      "category",
-      "country",
-      "year",
-      "sort_field",
-      "sort_type",
-      "sort_lang"
-    ]) {
+    const categorySlug = resolveSlug(CATEGORIES, extras.genre ?? extras.category);
+    if (categorySlug) params.set("category", categorySlug);
+
+    const countrySlug = resolveSlug(COUNTRIES, extras.country);
+    if (countrySlug) params.set("country", countrySlug);
+
+    if (extras.year !== undefined && extras.year !== "") {
+      params.set("year", String(extras.year));
+    }
+
+    for (const key of ["sort_field", "sort_type", "sort_lang"]) {
       if (extras[key] !== undefined && extras[key] !== "") {
         params.set(key, String(extras[key]));
       }
@@ -914,6 +1042,6 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Nuvio PhimAPI v4.3 listening on ${PORT}`);
+  console.log(`Nuvio PhimAPI v4.4 listening on ${PORT}`);
   if (PUBLIC_URL) console.log(`PUBLIC_URL=${PUBLIC_URL}`);
 });
