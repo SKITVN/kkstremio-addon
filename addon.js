@@ -2,7 +2,7 @@ const { addonBuilder } = require("stremio-addon-sdk");
 
 const API_BASE = (process.env.KKPHIM_API_BASE || "https://phimapi.com").replace(/\/+$/, "");
 const CACHE_SECONDS = Number(process.env.CACHE_SECONDS || 300);
-const PAGE_SIZE = Math.min(Math.max(Number(process.env.PAGE_SIZE || 24), 1), 100);
+const PAGE_SIZE = Math.min(Math.max(Number(process.env.PAGE_SIZE || 64), 1), 64);
 
 const COUNTRIES = [
   ["Trung Quốc", "trung-quoc"], ["Hàn Quốc", "han-quoc"], ["Nhật Bản", "nhat-ban"],
@@ -27,35 +27,38 @@ const GENRES = [
 
 const YEARS = Array.from({ length: 15 }, (_, i) => String(new Date().getFullYear() - i));
 
-function filterCatalogs(prefix, type, label, pairs, endpointKind) {
-  return pairs.flatMap(([name, slug]) => [{
-    id: `${prefix}-${slug}-movie`, type: "movie", name: `${label} ${name} - Phim lẻ`,
-    extra: [{ name: "skip", isRequired: false }],
-    _filter: { endpointKind, slug, expected: "movie" }
-  }, {
-    id: `${prefix}-${slug}-series`, type: "series", name: `${label} ${name} - Phim bộ`,
-    extra: [{ name: "skip", isRequired: false }],
-    _filter: { endpointKind, slug, expected: "series" }
-  }]);
+function extraDef(name, options) {
+  const e = { name, isRequired: false };
+  if (options) e.options = options;
+  return e;
 }
 
+const COUNTRY_OPTIONS = COUNTRIES.map(([name]) => name);
+const GENRE_OPTIONS = GENRES.map(([name]) => name);
+const YEAR_OPTIONS = YEARS;
+
+// Keep the manifest compact: Stremio/AddonBuilder rejects manifests over 8 KiB.
+// Country/genre/year are exposed as selectable extras on two generic catalogs,
+// instead of generating dozens of separate catalogs.
 const CATALOGS = [
-  { id: "new-v2-movie", type: "movie", name: "KKPhim - Phim mới cập nhật v2 - Phim lẻ", extra: [{ name: "skip", isRequired: false }] },
-  { id: "new-v2-series", type: "series", name: "KKPhim - Phim mới cập nhật v2 - Phim bộ", extra: [{ name: "skip", isRequired: false }] },
-  { id: "series", type: "series", name: "KKPhim - Phim bộ", extra: [{ name: "skip", isRequired: false }] },
-  { id: "movies", type: "movie", name: "KKPhim - Phim lẻ", extra: [{ name: "skip", isRequired: false }] },
-  { id: "theater", type: "movie", name: "KKPhim - Phim chiếu rạp", extra: [{ name: "skip", isRequired: false }] },
-  { id: "animation-series", type: "series", name: "KKPhim - Hoạt hình", extra: [{ name: "skip", isRequired: false }] },
-  { id: "animation-movie", type: "movie", name: "KKPhim - Hoạt hình - Phim lẻ", extra: [{ name: "skip", isRequired: false }] },
-  { id: "donghua-series", type: "series", name: "KKPhim - Hoạt hình Trung Quốc", extra: [{ name: "skip", isRequired: false }] },
-  { id: "search-movie", type: "movie", name: "KKPhim - Tìm kiếm phim", extra: [{ name: "search", isRequired: true }, { name: "skip", isRequired: false }] },
-  { id: "search-series", type: "series", name: "KKPhim - Tìm kiếm phim bộ", extra: [{ name: "search", isRequired: true }, { name: "skip", isRequired: false }] },
-  ...filterCatalogs("country", "", "KKPhim -", COUNTRIES, "country"),
-  ...filterCatalogs("genre", "", "KKPhim -", GENRES, "genre"),
-  ...YEARS.flatMap(year => [
-    { id: `year-${year}-movie`, type: "movie", name: `KKPhim - Năm ${year} - Phim lẻ`, extra: [{ name: "skip", isRequired: false }], _filter: { endpointKind: "year", slug: year, expected: "movie" } },
-    { id: `year-${year}-series`, type: "series", name: `KKPhim - Năm ${year} - Phim bộ`, extra: [{ name: "skip", isRequired: false }], _filter: { endpointKind: "year", slug: year, expected: "series" } }
-  ])
+  { id: "new-v2-movie", type: "movie", name: "KKPhim - Phim mới cập nhật v2 - Phim lẻ", extra: [extraDef("skip")] },
+  { id: "new-v2-series", type: "series", name: "KKPhim - Phim mới cập nhật v2 - Phim bộ", extra: [extraDef("skip")] },
+  { id: "series", type: "series", name: "KKPhim - Phim bộ", extra: [extraDef("skip")] },
+  { id: "movies", type: "movie", name: "KKPhim - Phim lẻ", extra: [extraDef("skip")] },
+  { id: "theater", type: "movie", name: "KKPhim - Phim chiếu rạp", extra: [extraDef("skip")] },
+  { id: "animation-series", type: "series", name: "KKPhim - Hoạt hình - Phim bộ", extra: [extraDef("skip")] },
+  { id: "animation-movie", type: "movie", name: "KKPhim - Hoạt hình - Phim lẻ", extra: [extraDef("skip")] },
+  { id: "donghua-series", type: "series", name: "KKPhim - Hoạt hình Trung Quốc", extra: [extraDef("skip")] },
+  { id: "search-movie", type: "movie", name: "KKPhim - Tìm kiếm phim", extra: [extraDef("search", null), extraDef("skip")] },
+  { id: "search-series", type: "series", name: "KKPhim - Tìm kiếm phim bộ", extra: [extraDef("search", null), extraDef("skip")] },
+  {
+    id: "filters-movie", type: "movie", name: "KKPhim - Lọc phim",
+    extra: [extraDef("country", COUNTRY_OPTIONS), extraDef("genre", GENRE_OPTIONS), extraDef("year", YEAR_OPTIONS), extraDef("skip")]
+  },
+  {
+    id: "filters-series", type: "series", name: "KKPhim - Lọc phim bộ",
+    extra: [extraDef("country", COUNTRY_OPTIONS), extraDef("genre", GENRE_OPTIONS), extraDef("year", YEAR_OPTIONS), extraDef("skip")]
+  }
 ];
 
 // _filter is server-side metadata and must not be exposed in the manifest.
@@ -187,9 +190,7 @@ function filterItems(items, expected) {
   return items.filter(x => detectType(x) === expected);
 }
 
-function configFor(id) {
-  const fixed = CATALOGS.find(x => x.id === id)?._filter;
-  if (fixed) return fixed;
+function configFor(id, type, extra = {}) {
   switch (id) {
     case "new-v2-movie": return { endpointKind: "new-v2", expected: "movie" };
     case "new-v2-series": return { endpointKind: "new-v2", expected: "series" };
@@ -199,22 +200,43 @@ function configFor(id) {
     case "animation-series": return { endpointKind: "type", slug: "hoat-hinh", expected: "series" };
     case "animation-movie": return { endpointKind: "type", slug: "hoat-hinh", expected: "movie" };
     case "donghua-series": return { endpointKind: "type", slug: "hoat-hinh", country: "trung-quoc", expected: "series" };
+    case "filters-movie": return { endpointKind: "filtered", slug: "phim-le", expected: "movie", extra };
+    case "filters-series": return { endpointKind: "filtered", slug: "phim-bo", expected: "series", extra };
     default: return null;
   }
 }
 
+function slugFromLabel(value, pairs) {
+  if (!value) return undefined;
+  const v = String(value).trim().toLowerCase();
+  const hit = pairs.find(([name, slug]) => name.toLowerCase() === v || slug === v);
+  return hit ? hit[1] : v;
+}
+
 async function catalogData(cfg, page) {
   if (cfg.endpointKind === "new-v2") {
+    // The requested "Phim mới cập nhật v2" endpoint.
     return api("/danh-sach/phim-moi-cap-nhat-v2", { page });
   }
   if (cfg.endpointKind === "type") {
     return api(`/v1/api/danh-sach/${encodeURIComponent(cfg.slug)}`, {
-      page, sort_field: "modified.time", sort_type: "desc", sort_lang: cfg.sort_lang, country: cfg.country, category: cfg.category, year: cfg.year
+      page, limit: PAGE_SIZE, sort_field: "modified.time", sort_type: "desc",
+      sort_lang: cfg.sort_lang, country: cfg.country, category: cfg.category, year: cfg.year
     });
   }
-  if (cfg.endpointKind === "country") return api(`/v1/api/quoc-gia/${encodeURIComponent(cfg.slug)}`, { page, sort_field: "modified.time", sort_type: "desc" });
-  if (cfg.endpointKind === "genre") return api(`/v1/api/the-loai/${encodeURIComponent(cfg.slug)}`, { page, sort_field: "modified.time", sort_type: "desc" });
-  if (cfg.endpointKind === "year") return api(`/v1/api/nam/${encodeURIComponent(cfg.slug)}`, { page, sort_field: "modified.time", sort_type: "desc" });
+  if (cfg.endpointKind === "filtered") {
+    const e = cfg.extra || {};
+    const country = slugFromLabel(e.country, COUNTRIES);
+    const category = slugFromLabel(e.genre, GENRES);
+    const year = e.year ? String(e.year) : undefined;
+    // Use the dedicated endpoint when exactly one filter is selected.
+    if (country && !category && !year) return api(`/v1/api/quoc-gia/${encodeURIComponent(country)}`, { page, limit: PAGE_SIZE, sort_field: "modified.time", sort_type: "desc" });
+    if (category && !country && !year) return api(`/v1/api/the-loai/${encodeURIComponent(category)}`, { page, limit: PAGE_SIZE, sort_field: "modified.time", sort_type: "desc" });
+    if (year && !country && !category) return api(`/v1/api/nam/${encodeURIComponent(year)}`, { page, limit: PAGE_SIZE, sort_field: "modified.time", sort_type: "desc" });
+    return api(`/v1/api/danh-sach/${encodeURIComponent(cfg.slug)}`, {
+      page, limit: PAGE_SIZE, sort_field: "modified.time", sort_type: "desc", country, category, year
+    });
+  }
   throw new Error("Unknown catalog endpoint");
 }
 
@@ -229,7 +251,7 @@ builder.defineCatalogHandler(async ({ id, type, extra = {} }) => {
       return { metas: await Promise.all(items.map(x => resolvePreview(x, type))), cacheMaxAge: 120, staleRevalidate: 600 };
     }
 
-    const cfg = configFor(id);
+    const cfg = configFor(id, type, extra);
     if (!cfg) return { metas: [] };
     const { page } = pageFromSkip(extra);
     const d = await catalogData(cfg, page);

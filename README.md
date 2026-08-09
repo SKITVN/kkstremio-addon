@@ -1,62 +1,36 @@
-# KKPhim Stremio Addon v5 — GitHub + Render
+# KKPhim Stremio Addon v6
 
-Bản này được xây dựng lại theo tài liệu API KKPhim hiện tại.
+Bản v6 sửa lỗi `manifest size exceeds 8kb` của bản v5.
 
-## Các phần chính
+## Catalogs
 
-- Phim mới cập nhật **v2**: `/danh-sach/phim-moi-cap-nhat-v2`
-- Phim bộ: `/v1/api/danh-sach/phim-bo`
-- Phim lẻ: `/v1/api/danh-sach/phim-le`
-- Phim chiếu rạp: `/v1/api/danh-sach/phim-chieu-rap`
-- Hoạt hình và hoạt hình Trung Quốc
-- Phân loại theo quốc gia
-- Phân loại theo thể loại
-- Phân loại theo năm
-- Tìm kiếm phim / phim bộ
-- Thông tin phim đầy đủ: nội dung, poster, backdrop, năm, thể loại, quốc gia, diễn viên, đạo diễn, rating, trailer, tập phim
-- Stream HLS `link_m3u8` và fallback `link_embed`
-- Phân biệt ID Movie/Series ngay từ catalog để không làm mất phim bộ do metadata TMDB bị thiếu/sai type
-- Phân trang Stremio → `page` API KKPhim
+- Phim mới cập nhật v2 — phim lẻ
+- Phim mới cập nhật v2 — phim bộ
+- Phim bộ
+- Phim lẻ
+- Phim chiếu rạp
+- Hoạt hình — phim bộ/phim lẻ
+- Hoạt hình Trung Quốc
+- Tìm kiếm phim/phim bộ
+- Lọc phim: quốc gia, thể loại, năm
+- Lọc phim bộ: quốc gia, thể loại, năm
+
+## Vì sao v5 lỗi?
+
+Bản v5 tạo một catalog riêng cho từng quốc gia, thể loại và năm, đồng thời tách movie/series. Số lượng catalog làm manifest vượt giới hạn 8 KiB của `stremio-addon-sdk`.
+
+V6 dùng 2 catalog lọc chung và khai báo các lựa chọn trong `extra.options`, nên manifest nhỏ hơn giới hạn. Stremio hỗ trợ `extra` với `options` cho catalog filters.
 
 ## Deploy Render
 
-Project này dùng `npm install`, không yêu cầu `package-lock.json`.
+- Build: `npm install`
+- Start: `npm start`
+- Health check: `/manifest.json`
 
-### GitHub
+Sau khi Render deploy thành công, cài:
 
-Upload toàn bộ project vào repository GitHub.
-
-### Render
-
-Dùng **New → Blueprint** và chọn repository. Render đọc `render.yaml`.
-
-Hoặc Web Service:
-
-- Build Command: `npm install`
-- Start Command: `npm start`
-- Health Check: `/manifest.json`
-
-Manifest sau khi deploy:
-
-```text
-https://TEN-SERVICE.onrender.com/manifest.json
-```
-
-## Local
-
-```bash
-npm install
-npm start
-```
-
-Mở:
-
-```text
-http://localhost:7000/manifest.json
-```
+`https://kkphim-stremio-addon.onrender.com/manifest.json`
 
 ## Lưu ý
 
-- Sau khi thay addon trên GitHub, nên gỡ addon KKPhim cũ khỏi Stremio rồi cài lại manifest để tránh cache manifest/catalog cũ.
-- API nguồn và stream phụ thuộc KKPhim/PhimAPI và có thể thay đổi.
-- Render Free có thể sleep khi không có traffic.
+API nguồn và URL stream phụ thuộc vào KKPhim/PhimAPI và có thể thay đổi.
