@@ -35,26 +35,44 @@ function num(value, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-// PhimAPI default page size for danh-sach is 24
+// PhimAPI danh-sach page size
 const API_PAGE_SIZE = 24;
+// Stremio/Nuvio treat < ~100 items as end-of-catalog
+const CLIENT_PAGE_SIZE = 100;
 
 /**
- * Map Stremio/Nuvio `skip` (number of items already shown) → API page number.
- * One request = one API page so infinite scroll stays in sync.
+ * Parse extras from:
+ * - query: ?skip=100
+ * - path:  /catalog/movie/phim-le/skip=100.json
+ * - path:  /catalog/movie/phim-le/genre=Hanh%20Dong&skip=100.json
  */
-function pageFromQuery(query) {
-  if (query.page !== undefined) return num(query.page, 1, 1, 10000);
+function parseExtras(req) {
+  const extras = { ...req.query };
 
-  const skip = num(query.skip, 0, 0, 1000000);
-  // Prefer explicit limit from client, else API page size
-  const pageSize = num(query.limit, API_PAGE_SIZE, 1, 64);
+  // Path segment after catalog id, e.g. "skip=100" or "search=foo&skip=100"
+  const raw = req.params.extra;
+  if (raw) {
+    const cleaned = String(raw).replace(/\.json$/i, "");
+    for (const part of cleaned.split("&")) {
+      const eq = part.indexOf("=");
+      if (eq === -1) continue;
+      const key = decodeURIComponent(part.slice(0, eq));
+      const val = decodeURIComponent(part.slice(eq + 1));
+      extras[key] = val;
+    }
+  }
 
-  return Math.floor(skip / pageSize) + 1;
+  return extras;
 }
 
-function buildFilterParams(query, page) {
+function getSkip(extras) {
+  return num(extras.skip, 0, 0, 1000000);
+}
+
+function buildFilterParams(extras, page) {
   const p = new URLSearchParams();
   p.set("page", String(page));
+  p.set("limit", String(API_PAGE_SIZE));
 
   const allowed = [
     "category",
@@ -66,8 +84,8 @@ function buildFilterParams(query, page) {
   ];
 
   for (const key of allowed) {
-    if (query[key] !== undefined && query[key] !== "") {
-      p.set(key, String(query[key]));
+    if (extras[key] !== undefined && extras[key] !== "") {
+      p.set(key, String(extras[key]));
     }
   }
 
@@ -300,35 +318,88 @@ function metaFromItem(item, catalogType, base, req) {
 }
 
 /*
- * One API page per request.
- * Stremio/Nuvio pass `skip` = number of metas already displayed.
- * Mapping: page = floor(skip / pageSize) + 1
- * Returning a stable page size keeps infinite scroll working.
+ * Stremio/Nuvio pagination rules:
+ * - skip is multiples of ~100
+ * - if response has < 100 metas → client stops loading
+ *
+ * PhimAPI returns 24/page → fetch enough consecutive API pages,
+ * then slice to CLIENT_PAGE_SIZE starting at `skip`.
  */
-async function getCatalogItems(catalog, query) {
-  const page = pageFromQuery(query);
-  const params = buildFilterParams(query, page);
+async function getCatalogItems(catalog, extras) {
+  const skip = getSkip(extras);
+  const want = CLIENT_PAGE_SIZE;
 
-  // Optional: allow higher limit when API supports it
-  const limit = num(query.limit, API_PAGE_SIZE, 1, 64);
-  params.set("limit", String(limit));
+  // First API page that contains item at index `skip`
+  const startPage = Math.floor(skip / API_PAGE_SIZE) + 1;
+  const offsetInFirst = skip % API_PAGE_SIZE;
+
+  // Need offsetInFirst + want items → enough API pages
+  const pagesNeeded = Math.ceil((offsetInFirst + want) / API_PAGE_SIZE);
 
   const slug = catalog.slug || "phim-moi-cap-nhat";
-  const path = `/v1/api/danh-sach/${slug}?${params.toString()}`;
+  const paths = [];
 
-  const data = await fetchJson(path);
-  const items = listItems(data);
-  const base = imageBase(data);
-  const pag = pagination(data);
+  for (let i = 0; i < pagesNeeded; i++) {
+    const page = startPage + i;
+    const params = buildFilterParams(extras, page);
+    paths.push(`/v1/api/danh-sach/${slug}?${params.toString()}`);
+  }
+
+  const responses = await Promise.allSettled(paths.map(fetchJson));
+
+  const seen = new Set();
+  const collected = [];
+  let base = DEFAULT_CDN;
+  let lastPag = null;
+  let hitEnd = false;
+
+  for (const result of responses) {
+    if (result.status !== "fulfilled") {
+      console.error(result.reason);
+      continue;
+    }
+
+    const data = result.value;
+    const batch = listItems(data);
+    lastPag = pagination(data) || lastPag;
+    base = imageBase(data);
+
+    if (!batch.length) {
+      hitEnd = true;
+      break;
+    }
+
+    for (const item of batch) {
+      const key = item.slug || item._id || item.name;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      collected.push(item);
+    }
+
+    if (batch.length < API_PAGE_SIZE) {
+      hitEnd = true;
+      break;
+    }
+  }
+
+  // collected[0] corresponds to global index (startPage-1)*API_PAGE_SIZE
+  // We need global index `skip` → local index `offsetInFirst`
+  const slice = collected.slice(offsetInFirst, offsetInFirst + want);
+
+  const hasMore =
+    !hitEnd &&
+    slice.length >= want &&
+    (lastPag
+      ? Number(lastPag.currentPage || startPage) <
+        Number(lastPag.totalPages || 1)
+      : true);
 
   return {
-    items,
+    items: slice,
     base,
-    pagination: pag,
-    page,
-    hasMore: pag
-      ? Number(pag.currentPage || page) < Number(pag.totalPages || 1)
-      : items.length >= limit
+    pagination: lastPag,
+    skip,
+    hasMore
   };
 }
 
@@ -432,7 +503,7 @@ app.get("/", (_req, res) => {
 <html lang="vi">
 <head>
 <meta charset="utf-8">
-<title>Nuvio PhimAPI Addon v4.2</title>
+<title>Nuvio PhimAPI Addon v4.3</title>
 <style>
 body{font-family:Arial,sans-serif;background:#0f1117;color:#eee;max-width:900px;margin:40px auto;padding:20px}
 a{color:#69b7ff}li{margin:12px 0}
@@ -440,7 +511,7 @@ code{background:#181c25;padding:3px 6px;border-radius:5px}
 </style>
 </head>
 <body>
-<h1>Nuvio PhimAPI Addon v4.2</h1>
+<h1>Nuvio PhimAPI Addon v4.3</h1>
 <p>Poster CDN + infinite scroll (1 API page / request) + Phim Bộ series.</p>
 <ul>
 <li><a href="/health">Health</a></li>
@@ -460,7 +531,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     addon: "vn.starskingit.phimapi",
-    version: "4.2.0",
+    version: "4.3.0",
     publicUrl: PUBLIC_URL || null
   });
 });
@@ -511,7 +582,7 @@ app.get("/image", async (req, res) => {
 app.get("/manifest.json", (_req, res) => {
   res.json({
     id: "vn.starskingit.phimapi",
-    version: "4.2.0",
+    version: "4.3.0",
     name: "KKPhim • PhimAPI",
     description:
       "Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — API v1 (poster + infinite scroll).",
@@ -532,17 +603,18 @@ app.get("/manifest.json", (_req, res) => {
   });
 });
 
-/* Search */
-app.get("/catalog/:type/search.json", async (req, res) => {
+async function handleSearch(req, res) {
   try {
-    const keyword = String(req.query.search || "").trim();
+    const extras = parseExtras(req);
+    const keyword = String(extras.search || extras.keyword || "").trim();
 
     if (!keyword) {
       return res.json({ metas: [] });
     }
 
-    const page = pageFromQuery(req.query);
-    const limit = num(req.query.limit, 64, 1, 64);
+    const skip = getSkip(extras);
+    const page = Math.floor(skip / API_PAGE_SIZE) + 1;
+    const limit = 64;
 
     const params = new URLSearchParams({
       keyword,
@@ -558,8 +630,8 @@ app.get("/catalog/:type/search.json", async (req, res) => {
       "sort_type",
       "sort_lang"
     ]) {
-      if (req.query[key] !== undefined && req.query[key] !== "") {
-        params.set(key, String(req.query[key]));
+      if (extras[key] !== undefined && extras[key] !== "") {
+        params.set(key, String(extras[key]));
       }
     }
 
@@ -577,12 +649,10 @@ app.get("/catalog/:type/search.json", async (req, res) => {
     console.error("SEARCH ERROR", e);
     res.status(502).json({ metas: [], error: e.message });
   }
-});
+}
 
-/* Catalog */
-app.get("/catalog/:type/:id.json", async (req, res) => {
+async function handleCatalog(req, res) {
   try {
-    // Match by id first; allow type mismatch fallback so clients still get data
     let catalog = CATALOGS.find(
       c => c.id === req.params.id && c.type === req.params.type
     );
@@ -595,23 +665,30 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
       return res.status(404).json({ metas: [] });
     }
 
-    const { items, base, pagination, page, hasMore } = await getCatalogItems(
+    const extras = parseExtras(req);
+
+    // Dedicated search inside a catalog: /catalog/movie/phim-le/search=avengers.json
+    if (extras.search) {
+      req.query = { ...req.query, ...extras };
+      return handleSearch(req, res);
+    }
+
+    const { items, base, pagination, skip, hasMore } = await getCatalogItems(
       catalog,
-      req.query
+      extras
     );
 
-    // Force metas.type = catalog.type (series catalog → series)
     const metas = items
       .map(item => metaFromItem(item, catalog.type, base, req))
       .filter(Boolean);
 
-    res.set("Cache-Control", "public, max-age=60, s-maxage=60");
+    // Short cache so scroll requests stay fresh
+    res.set("Cache-Control", "public, max-age=30, s-maxage=30");
 
     res.json({
       metas,
-      // Helpful for debugging; ignored by clients
       pagination,
-      page,
+      skip,
       hasMore
     });
   } catch (e) {
@@ -621,7 +698,21 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
       error: e.message
     });
   }
-});
+}
+
+/* Search — query form */
+app.get("/catalog/:type/search.json", handleSearch);
+
+/*
+ * Catalog routes:
+ *   /catalog/movie/phim-le.json
+ *   /catalog/movie/phim-le/skip=100.json          ← Stremio path extras
+ *   /catalog/movie/phim-le/skip=100               ← some clients omit .json
+ *   /catalog/series/phim-bo/search=one%20piece.json
+ */
+app.get("/catalog/:type/:id.json", handleCatalog);
+app.get("/catalog/:type/:id/:extra.json", handleCatalog);
+app.get("/catalog/:type/:id/:extra", handleCatalog);
 
 /* Meta — đầy đủ thông tin từ API */
 app.get("/meta/:type/:id.json", async (req, res) => {
@@ -823,6 +914,6 @@ app.get("/stream/:type/:id.json", async (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Nuvio PhimAPI v4.2 listening on ${PORT}`);
+  console.log(`Nuvio PhimAPI v4.3 listening on ${PORT}`);
   if (PUBLIC_URL) console.log(`PUBLIC_URL=${PUBLIC_URL}`);
 });
