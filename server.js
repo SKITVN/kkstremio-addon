@@ -28,7 +28,7 @@ const CATEGORIES = [
   ['Phim Ngắn','phim-ngan'],['Lịch Sử','lich-su']
 ].map(([name, slug]) => ({ name, slug }));
 
-// Ba quốc gia người dùng yêu cầu hiển thị ngay trong bộ chọn của từng catalog.
+// Quốc gia hiển thị thành bộ lọc riêng trong từng catalog.
 const FEATURED_COUNTRIES = [
   { name: 'Hàn Quốc', slug: 'han-quoc' },
   { name: 'Trung Quốc', slug: 'trung-quoc' },
@@ -53,13 +53,11 @@ const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = [];
 for (let y = CURRENT_YEAR + 1; y >= 1970; y--) YEARS.push(String(y));
 
-// Stremio/Nuvio thường chỉ hiển thị tốt extra chuẩn "genre".
-// Vì vậy quốc gia + năm được đưa vào cùng selector, có nhãn rõ ràng.
-const GENRE_OPTIONS = [
-  ...FEATURED_COUNTRIES.map(x => `Quốc gia • ${x.name}`),
-  ...YEARS.map(y => `Năm • ${y}`),
-  ...CATEGORIES.map(x => x.name)
-];
+// Mỗi nhóm lọc là một extra độc lập để client có thể kết hợp:
+// Thể loại + Quốc gia + Năm phát hành.
+const GENRE_OPTIONS = CATEGORIES.map(x => x.name);
+const COUNTRY_OPTIONS = FEATURED_COUNTRIES.map(x => x.name);
+const YEAR_OPTIONS = [...YEARS];
 
 function num(value, fallback, min, max) {
   const n = Number(value);
@@ -91,25 +89,28 @@ function normalizeFilters(extras) {
   let category;
   let country;
   let year;
-  const genre = extras.genre != null ? String(extras.genre).trim() : '';
 
-  if (genre) {
-    const countryMatch = genre.match(/^Quốc gia\s*•\s*(.+)$/i);
-    const yearMatch = genre.match(/^Năm\s*•\s*(\d{4})$/i);
-    if (countryMatch) country = resolveSlug(FEATURED_COUNTRIES, countryMatch[1]);
-    else if (yearMatch) year = yearMatch[1];
-    else {
-      // Chấp nhận cả tên/slug quốc gia hoặc năm gửi trực tiếp qua genre.
-      const directCountry = FEATURED_COUNTRIES.find(x => x.slug === genre || x.name.toLowerCase() === genre.toLowerCase());
-      if (directCountry) country = directCountry.slug;
-      else if (/^(19|20)\d{2}$/.test(genre)) year = genre;
-      else category = resolveSlug(CATEGORIES, genre);
-    }
+  // Thể loại là selector riêng.
+  if (extras.genre != null && String(extras.genre).trim() !== '') {
+    const genre = String(extras.genre).trim();
+    // Tương thích với manifest v4.5 nếu client còn cache giá trị cũ.
+    const oldCountry = genre.match(/^Quốc gia\s*•\s*(.+)$/i);
+    const oldYear = genre.match(/^Năm\s*•\s*(\d{4})$/i);
+    if (oldCountry) country = resolveSlug(FEATURED_COUNTRIES, oldCountry[1]);
+    else if (oldYear) year = oldYear[1];
+    else category = resolveSlug(CATEGORIES, genre);
   }
 
+  // Quốc gia và năm là hai selector độc lập nên có thể chọn đồng thời.
+  if (extras.country != null && String(extras.country).trim() !== '') {
+    country = resolveSlug(COUNTRIES, extras.country);
+  }
+  if (extras.year != null && String(extras.year).trim() !== '') {
+    const y = String(extras.year).trim().replace(/^Năm\s*•\s*/i, '');
+    if (/^(19|20)\d{2}$/.test(y)) year = y;
+  }
   if (!category && extras.category) category = resolveSlug(CATEGORIES, extras.category);
-  if (!country && extras.country) country = resolveSlug(COUNTRIES, extras.country);
-  if (!year && extras.year) year = String(extras.year);
+
   return { category, country, year };
 }
 
@@ -127,7 +128,7 @@ function buildFilterParams(extras, page) {
 
 async function fetchJson(path) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const r = await fetch(url, { headers: { accept:'application/json', 'user-agent':'Mozilla/5.0 Nuvio-KKPhim-Addon/4.5' } });
+  const r = await fetch(url, { headers: { accept:'application/json', 'user-agent':'Mozilla/5.0 Nuvio-KKPhim-Addon/4.6' } });
   if (!r.ok) throw new Error(`PhimAPI HTTP ${r.status}: ${url}`);
   return r.json();
 }
@@ -237,12 +238,12 @@ function episodeEntries(item) {
   return out;
 }
 
-app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.5</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.5</h1><p>5 catalog + poster + infinite scroll + bộ lọc Quốc gia/Năm trong Genre.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
-app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.5.0', publicUrl:PUBLIC_URL || null }));
+app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.6</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.6</h1><p>5 catalog + poster + infinite scroll + bộ lọc riêng Thể loại / Quốc gia / Năm phát hành.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
+app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.6.0', publicUrl:PUBLIC_URL || null }));
 
 app.get('/manifest.json', (_req,res) => res.json({
-  id:'vn.starskingit.phimapi', version:'4.5.0', name:'KKPhim • PhimAPI',
-  description:'Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — lọc Thể loại / Hàn Quốc / Trung Quốc / Âu Mỹ / Năm phát hành.',
+  id:'vn.starskingit.phimapi', version:'4.6.0', name:'KKPhim • PhimAPI',
+  description:'Phim Mới, Phim Bộ, Phim Lẻ, Phim Chiếu Rạp, Hoạt Hình — bộ lọc riêng Thể loại / Quốc gia / Năm phát hành, có thể kết hợp đồng thời.',
   logo:'https://www.google.com/s2/favicons?domain=phimapi.com&sz=128',
   resources:['catalog','meta','stream'], types:['movie','series'], idPrefixes:['phimapi:'],
   catalogs: CATALOGS.map(c => ({
@@ -250,6 +251,8 @@ app.get('/manifest.json', (_req,res) => res.json({
     extra:[
       { name:'search', isRequired:false },
       { name:'genre', isRequired:false, options:GENRE_OPTIONS, optionsLimit:GENRE_OPTIONS.length },
+      { name:'country', isRequired:false, options:COUNTRY_OPTIONS, optionsLimit:COUNTRY_OPTIONS.length },
+      { name:'year', isRequired:false, options:YEAR_OPTIONS, optionsLimit:YEAR_OPTIONS.length },
       { name:'skip', isRequired:false }
     ]
   }))
