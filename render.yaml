@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: nuvio-phimapi-addon
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
