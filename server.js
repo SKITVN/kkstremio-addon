@@ -28,17 +28,29 @@ const COUNTRY_PRESETS = [
   { name: 'Âu Mỹ', slug: 'au-my' }
 ];
 
-// Xếp theo nhóm để giao diện Nuvio dễ đọc: catalog gốc trước, sau đó 3 quốc gia
-// của chính catalog đó. Tổng cộng 20 catalog nhưng luôn nằm cạnh nhau theo nhóm.
+// Nuvio hiện chỉ render ổn định một selector `genre` cho mỗi catalog.
+// Để KHÔNG mất Thể loại nhưng vẫn có luồng Quốc gia -> Năm, mỗi quốc gia có:
+//   1) catalog quốc gia dùng genre = Thể loại
+//   2) catalog "Theo năm" dùng genre = Năm phát hành
+// Ví dụ: "Phim Bộ · Hàn Quốc" lọc thể loại; "Phim Bộ · Hàn Quốc · Theo năm" lọc năm.
 const CATALOGS = BASE_CATALOGS.flatMap(c => [
   { ...c, filterMode: 'category' },
-  ...COUNTRY_PRESETS.map(country => ({
-    ...c,
-    id: `${c.id}-${country.slug}`,
-    name: `${c.name} · ${country.name}`,
-    presetCountry: country.slug,
-    filterMode: 'year'
-  }))
+  ...COUNTRY_PRESETS.flatMap(country => [
+    {
+      ...c,
+      id: `${c.id}-${country.slug}`,
+      name: `${c.name} · ${country.name}`,
+      presetCountry: country.slug,
+      filterMode: 'category'
+    },
+    {
+      ...c,
+      id: `${c.id}-${country.slug}-year`,
+      name: `${c.name} · ${country.name} · Theo năm`,
+      presetCountry: country.slug,
+      filterMode: 'year'
+    }
+  ])
 ]);
 
 const CATEGORIES = [
@@ -151,7 +163,7 @@ function buildFilterParams(extras, page, catalog) {
 
 async function fetchJson(path) {
   const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
-  const r = await fetch(url, { headers: { accept:'application/json', 'user-agent':'Mozilla/5.0 Nuvio-KKPhim-Addon/4.8' } });
+  const r = await fetch(url, { headers: { accept:'application/json', 'user-agent':'Mozilla/5.0 Nuvio-KKPhim-Addon/4.9' } });
   if (!r.ok) throw new Error(`PhimAPI HTTP ${r.status}: ${url}`);
   return r.json();
 }
@@ -261,12 +273,12 @@ function episodeEntries(item) {
   return out;
 }
 
-app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.8</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.8</h1><p>Bản tối ưu riêng cho Nuvio: mỗi nhóm phim có catalog gốc + Hàn Quốc / Trung Quốc / Âu Mỹ; vào catalog quốc gia rồi chọn Năm phát hành bằng bộ lọc Nuvio đang hỗ trợ.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
-app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.8.0', publicUrl:PUBLIC_URL || null }));
+app.get('/', (_req,res) => res.type('html').send(`<!doctype html><meta charset="utf-8"><title>KKPhim Addon v4.9</title><body style="font-family:Arial;background:#10131a;color:#eee;max-width:900px;margin:40px auto"><h1>KKPhim • PhimAPI v4.9</h1><p>Bản tối ưu Nuvio: catalog gốc lọc Thể loại; mỗi quốc gia có một catalog lọc Thể loại và một catalog riêng 'Theo năm' để lọc Năm phát hành.</p><p><a href="/manifest.json">manifest.json</a> · <a href="/health">health</a></p></body>`));
+app.get('/health', (_req,res) => res.json({ ok:true, addon:'vn.starskingit.phimapi', version:'4.9.0', publicUrl:PUBLIC_URL || null }));
 
 app.get('/manifest.json', (_req,res) => res.json({
-  id:'vn.starskingit.phimapi', version:'4.8.0', name:'KKPhim • PhimAPI',
-  description:'Bản tối ưu riêng cho Nuvio: chọn nhóm phim, chọn catalog quốc gia Hàn Quốc / Trung Quốc / Âu Mỹ, sau đó chọn Năm phát hành bằng bộ lọc genre mà Nuvio hiển thị ổn định.',
+  id:'vn.starskingit.phimapi', version:'4.9.0', name:'KKPhim • PhimAPI',
+  description:'Bản tối ưu cho Nuvio: giữ đầy đủ Thể loại. Mỗi quốc gia Hàn Quốc / Trung Quốc / Âu Mỹ có catalog lọc Thể loại và catalog Theo năm riêng, phù hợp giới hạn một selector genre của Nuvio.',
   logo:'https://www.google.com/s2/favicons?domain=phimapi.com&sz=128',
   resources:['catalog','meta','stream'], types:['movie','series'], idPrefixes:['phimapi:'],
   catalogs: CATALOGS.map(c => ({
