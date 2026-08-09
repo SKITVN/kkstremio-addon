@@ -1,8 +1,8 @@
 {
   "name": "nuvio-phimapi-addon",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "private": true,
-  "description": "Nuvio/Stremio addon using KKPhim PhimAPI v1",
+  "description": "Nuvio/Stremio addon for PhimAPI / KKPhim",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,6 +11,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "express": "^5.1.0"
+    "express": "^4.21.2"
   }
 }

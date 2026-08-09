@@ -1,120 +1,52 @@
-# Nuvio PhimAPI Addon v4
+# Nuvio PhimAPI Addon v5
 
-Bản này sử dụng đúng tài liệu API KKPhim/PhimAPI trong các ảnh người dùng cung cấp.
+Bản này sửa 3 lỗi chính:
 
-## API đã tích hợp
+1. Poster trong catalog dùng **URL tuyệt đối** từ `poster_url`/`thumb_url`.
+2. Phim Bộ dùng đúng catalog `series` và endpoint `/v1/api/danh-sach/phim-bo`.
+3. Pagination dùng đúng `skip` của Nuvio/Stremio:
+   - skip=0 -> API page=1
+   - skip=24 -> API page=2
+   - skip=48 -> API page=3
+   - ...
 
-### Catalog
-- Phim Mới: `GET /v1/api/danh-sach?page=1`
-- Phim Bộ: `GET /v1/api/danh-sach/phim-bo?page=1`
-- Phim Lẻ: `GET /v1/api/danh-sach/phim-le?page=1`
-- Phim Chiếu Rạp: `GET /v1/api/danh-sach/phim-chieu-rap?page=1`
-- Hoạt Hình: `GET /v1/api/danh-sach/hoat-hinh?page=1`
+Không còn gộp 3 trang thành một response, vì cách đó làm Nuvio tính sai `skip` và có thể bỏ qua trang tiếp theo.
 
-### Bộ lọc
-Addon nhận và chuyển tiếp:
-- `page`
-- `limit`
-- `category`
-- `country`
-- `year`
-- `sort_field`
-- `sort_type`
-- `sort_lang`
+## Catalog
 
-### Tìm kiếm
-`GET /v1/api/tim-kiem?keyword=...&limit=64`
-
-### Chi tiết
-`GET /v1/api/phim/{slug}`
-
-### Hình ảnh
-`GET /v1/api/phim/{slug}/images`
-
-Addon ưu tiên ảnh TMDB từ endpoint `/images`, sau đó fallback về
-`poster_url` / `thumb_url` của danh sách.
-
-### Stream
-Đọc `episodes`, `server_data`, `link_m3u8`, `link_embed`.
-
-## Vì sao bản này nhiều phim hơn
-
-API danh sách trả mặc định 24 phim/trang. Nuvio thường chỉ gọi một trang catalog.
-
-Addon v4 mặc định tải **3 trang API** cho mỗi lần gọi catalog và gộp lại thành một danh sách. Có thể đổi bằng:
-
-```text
-?pages=1
-?pages=3
-?pages=5
-```
-
-Giới hạn 5 trang để tránh tạo request quá nặng.
-
-## Poster
-
-Tất cả poster/background được đi qua:
-
-```text
-/image?url=...
-```
-
-Proxy hỗ trợ:
-- phimapi.com
-- phimimg.com
-- img.phimapi.com
-- image.tmdb.org
-
-Điều này xử lý trường hợp Nuvio/Stremio không tải trực tiếp được CDN poster.
+- Phim Mới
+- Phim Bộ
+- Phim Lẻ
+- Phim Chiếu Rạp
+- Hoạt Hình
+- Tìm kiếm
 
 ## Render
 
-Build Command:
+Build:
+`npm install`
 
-```text
-npm install
-```
+Start:
+`npm start`
 
-Start Command:
+Sau khi deploy:
 
-```text
-npm start
-```
+`https://TEN-SERVICE.onrender.com/manifest.json`
 
-Health Check:
+## Test
 
-```text
-/health
-```
+- `/health`
+- `/manifest.json`
+- `/catalog/movie/phim-moi.json`
+- `/catalog/series/phim-bo.json`
+- `/catalog/movie/phim-le.json`
+- `/catalog/movie/phim-chieu-rap.json`
+- `/catalog/series/hoat-hinh.json`
 
-Không dùng `api/index.js`.
+## Cài vào Nuvio
 
-## Sau khi deploy
+Xóa addon v4 cũ trước, sau đó cài manifest v5:
 
-Ví dụ:
+`https://TEN-SERVICE.onrender.com/manifest.json`
 
-```text
-https://TEN-SERVICE.onrender.com/manifest.json
-```
-
-Test:
-
-```text
-https://TEN-SERVICE.onrender.com/catalog/movie/phim-moi.json
-https://TEN-SERVICE.onrender.com/catalog/series/phim-bo.json
-https://TEN-SERVICE.onrender.com/catalog/movie/phim-le.json
-https://TEN-SERVICE.onrender.com/catalog/movie/phim-chieu-rap.json
-https://TEN-SERVICE.onrender.com/catalog/series/hoat-hinh.json
-```
-
-Search:
-
-```text
-https://TEN-SERVICE.onrender.com/catalog/movie/search.json?search=avengers
-```
-
-Sau khi deploy bản v4, xóa addon cũ khỏi Nuvio rồi cài lại:
-
-```text
-https://TEN-SERVICE.onrender.com/manifest.json
-```
+Nếu Nuvio vẫn giữ cache catalog cũ, thoát Nuvio hoàn toàn rồi mở lại và cài manifest mới.
