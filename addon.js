@@ -16,8 +16,17 @@ const CATALOGS = [
   { id: "new", type: "movie", name: "KKPhim - Phim mới" },
   { id: "series", type: "series", name: "KKPhim - Phim bộ" },
   { id: "movies", type: "movie", name: "KKPhim - Phim lẻ" },
-  { id: "animation", type: "movie", name: "KKPhim - Hoạt hình" },
+  { id: "animation-movie", type: "movie", name: "KKPhim - Hoạt hình (phim)" },
+  { id: "animation-series", type: "series", name: "KKPhim - Hoạt hình (series)" },
+  { id: "donghua-movie", type: "movie", name: "KKPhim - Hoạt hình Trung Quốc" },
+  { id: "donghua-series", type: "series", name: "KKPhim - Hoạt hình Trung Quốc" },
   { id: "theater", type: "movie", name: "KKPhim - Chiếu rạp" },
+  { id: "vietsub-movie", type: "movie", name: "KKPhim - Vietsub" },
+  { id: "vietsub-series", type: "series", name: "KKPhim - Vietsub" },
+  { id: "thuyet-minh-movie", type: "movie", name: "KKPhim - Thuyết minh" },
+  { id: "thuyet-minh-series", type: "series", name: "KKPhim - Thuyết minh" },
+  { id: "long-tieng-movie", type: "movie", name: "KKPhim - Lồng tiếng" },
+  { id: "long-tieng-series", type: "series", name: "KKPhim - Lồng tiếng" },
   {
     id: "search-movie",
     type: "movie",
@@ -34,7 +43,7 @@ const CATALOGS = [
 
 const manifest = {
   id: "community.kkphim",
-  version: "1.0.0",
+  version: "1.2.0",
   name: "KKPhim",
   description: "Catalog, metadata và stream từ API KKPhim/PhimAPI.",
   logo: "https://kkphim.com/favicon.ico",
@@ -104,8 +113,27 @@ function imageUrl(movie, field) {
   if (!value) return undefined;
   if (/^https?:\/\//i.test(value)) return value;
 
-  const base = movie?.pathImage || "https://phimapi.com/uploads/movies/";
-  return base.replace(/\/+$/, "") + "/" + String(value).replace(/^\/+/, "");
+  // v1 endpoints return relative paths such as upload/vod/... .
+  // The media host is phimimg.com; using phimapi.com/uploads/movies here
+  // produces broken poster URLs in Stremio.
+  const clean = String(value).replace(/^\/+/, "");
+  return `https://phimimg.com/${clean}`;
+}
+
+function tmdbImage(path, size = "original") {
+  if (!path) return undefined;
+  if (/^https?:\/\//i.test(path)) return path;
+  return `https://image.tmdb.org/t/p/${size}/${String(path).replace(/^\/+/, "")}`;
+}
+
+function imageFromImagesResponse(data, kind = "poster") {
+  const d = data?.data || data || {};
+  const sizes = d?.image_sizes?.[kind] || {};
+  const images = Array.isArray(d?.images) ? d.images : [];
+  const first = images.find(x => x?.file_path || x?.url || x?.src);
+  if (first?.url || first?.src) return first.url || first.src;
+  if (first?.file_path) return tmdbImage(first.file_path, sizes.original ? "original" : "w780");
+  return undefined;
 }
 
 function contentType(item) {
@@ -147,14 +175,64 @@ function parseCatalogPage(args) {
   return { page, extra };
 }
 
-function listEndpoint(catalogId) {
+async function resolveCatalogPoster(item) {
+  const poster = imageUrl(item, "poster_url") || imageUrl(item, "thumb_url");
+  if (poster && /^https?:\/\//i.test(item?.poster_url || item?.thumb_url || "")) return poster;
+
+  // v1 list responses may contain only a filename. The legacy detail GET
+  // returns the canonical https://phimimg.com/... URL, so use it as a
+  // fallback for Stremio catalog cards.
+  if (item?.slug) {
+    try {
+      const detail = await api(`/phim/${encodeURIComponent(item.slug)}`);
+      const movie = unwrapMovie(detail);
+      const resolved = imageUrl(movie, "poster_url") || imageUrl(movie, "thumb_url");
+      if (resolved) return resolved;
+    } catch (_) {}
+  }
+  return poster;
+}
+
+async function catalogMetaResolved(item) {
+  const meta = catalogMeta(item);
+  if (!meta.poster || !/^https?:\/\//.test(meta.poster) || /phimimg\.com\/$/.test(meta.poster)) {
+    const poster = await resolveCatalogPoster(item);
+    if (poster) meta.poster = poster;
+  }
+  return meta;
+}
+
+async function mapWithConcurrency(items, limit, fn) {
+  const result = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      result[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return result;
+}
+
+function listConfig(catalogId) {
   switch (catalogId) {
-    case "series": return "/v1/api/danh-sach/phim-bo";
-    case "movies": return "/v1/api/danh-sach/phim-le";
-    case "animation": return "/v1/api/danh-sach/hoat-hinh";
-    case "theater": return "/v1/api/danh-sach/phim-chieu-rap";
+    case "series": return { path: "/danh-sach/phim-bo" };
+    case "movies": return { path: "/danh-sach/phim-le" };
+    case "animation-movie": return { path: "/danh-sach/hoat-hinh", type: "movie" };
+    case "animation-series": return { path: "/danh-sach/hoat-hinh", type: "series" };
+    case "donghua-movie": return { path: "/v1/api/danh-sach", country: "trung-quoc", category: "hoat-hinh", type: "movie" };
+    case "donghua-series": return { path: "/v1/api/danh-sach", country: "trung-quoc", category: "hoat-hinh", type: "series" };
+    case "theater": return { path: "/danh-sach/phim-chieu-rap" };
+    case "vietsub-movie": return { path: "/v1/api/danh-sach", sort_lang: "vietsub", type: "movie" };
+    case "vietsub-series": return { path: "/v1/api/danh-sach", sort_lang: "vietsub", type: "series" };
+    case "thuyet-minh-movie": return { path: "/v1/api/danh-sach", sort_lang: "thuyet-minh", type: "movie" };
+    case "thuyet-minh-series": return { path: "/v1/api/danh-sach", sort_lang: "thuyet-minh", type: "series" };
+    case "long-tieng-movie": return { path: "/v1/api/danh-sach", sort_lang: "long-tieng", type: "movie" };
+    case "long-tieng-series": return { path: "/v1/api/danh-sach", sort_lang: "long-tieng", type: "series" };
     case "new":
-    default: return "/v1/api/danh-sach";
+    default: return { path: "/v1/api/home" };
   }
 }
 
@@ -175,9 +253,14 @@ builder.defineCatalogHandler(async (args) => {
         sort_type: "desc"
       });
 
-      const metas = unwrapItems(data)
-        .filter((item) => contentType(item) === args.type)
-        .map(catalogMeta);
+      const filtered = unwrapItems(data)
+        .filter((item) => contentType(item) === args.type);
+
+      const metas = await mapWithConcurrency(
+        filtered,
+        6,
+        catalogMetaResolved
+      );
 
       return {
         metas,
@@ -186,16 +269,26 @@ builder.defineCatalogHandler(async (args) => {
       };
     }
 
-    const data = await api(listEndpoint(catalogId), {
+    const cfg = listConfig(catalogId);
+    const data = await api(cfg.path, {
       page,
       limit: PAGE_SIZE,
       sort_field: "modified.time",
-      sort_type: "desc"
+      sort_type: "desc",
+      sort_lang: cfg.sort_lang,
+      country: cfg.country,
+      category: cfg.category
     });
 
-    const metas = unwrapItems(data)
-      .filter((item) => contentType(item) === args.type)
-      .map(catalogMeta);
+    const filtered = unwrapItems(data)
+      .filter((item) => !cfg.type || contentType(item) === cfg.type)
+      .filter((item) => contentType(item) === args.type);
+
+    const metas = await mapWithConcurrency(
+      filtered,
+      6,
+      catalogMetaResolved
+    );
 
     return {
       metas,
@@ -259,6 +352,24 @@ builder.defineMetaHandler(async (args) => {
     const type = contentType(movie);
     const episodes = unwrapEpisodes(data, movie);
 
+    // Use the dedicated v1 GET endpoints as enrichment/fallbacks.
+    // They are intentionally fetched in parallel so metadata loading stays fast.
+    const [imagesData, peopleData, keywordsData] = await Promise.allSettled([
+      api(`/v1/api/phim/${encodeURIComponent(slug)}/images`),
+      api(`/v1/api/phim/${encodeURIComponent(slug)}/peoples`),
+      api(`/v1/api/phim/${encodeURIComponent(slug)}/keywords`)
+    ]);
+
+    const posterFromApi = imagesData.status === "fulfilled" ? imageFromImagesResponse(imagesData.value, "poster") : undefined;
+    const backdropFromApi = imagesData.status === "fulfilled" ? imageFromImagesResponse(imagesData.value, "backdrop") : undefined;
+    const people = peopleData.status === "fulfilled" ? (peopleData.value?.data || peopleData.value) : null;
+    const keywordData = keywordsData.status === "fulfilled" ? (keywordsData.value?.data || keywordsData.value) : null;
+
+    const enrichedCast = Array.isArray(movie.actor) ? movie.actor :
+      (Array.isArray(people?.cast) ? people.cast.map(x => x.name || x.original_name).filter(Boolean) : []);
+    const enrichedDirector = Array.isArray(movie.director) ? movie.director :
+      (Array.isArray(people?.crew) ? people.crew.filter(x => String(x.job || "").toLowerCase() === "director").map(x => x.name).filter(Boolean) : []);
+
     const genres = Array.isArray(movie.category)
       ? movie.category.map(x => x.name).filter(Boolean)
       : [];
@@ -271,18 +382,22 @@ builder.defineMetaHandler(async (args) => {
       id: `kkp:${movie.slug || slug}`,
       type,
       name: movie.name || movie.origin_name || slug,
-      poster: imageUrl(movie, "poster_url") || imageUrl(movie, "thumb_url"),
-      background: imageUrl(movie, "thumb_url") || imageUrl(movie, "poster_url"),
-      logo: imageUrl(movie, "poster_url"),
+      poster: imageUrl(movie, "poster_url") || imageUrl(movie, "thumb_url") || posterFromApi,
+      background: backdropFromApi || imageUrl(movie, "thumb_url") || imageUrl(movie, "poster_url"),
+      logo: imageUrl(movie, "poster_url") || posterFromApi,
       posterShape: "poster",
       description: stripHtml(movie.content || ""),
       releaseInfo: movie.year ? String(movie.year) : undefined,
       runtime: movie.time,
       genres,
       country: countries,
-      director: Array.isArray(movie.director) ? movie.director : [],
-      cast: Array.isArray(movie.actor) ? movie.actor : [],
+      director: enrichedDirector,
+      cast: enrichedCast,
       imdbRating: movie.imdb?.vote_average || movie.tmdb?.vote_average || undefined,
+      // Keep keywords when the dedicated endpoint provides them.
+      tags: Array.isArray(keywordData?.keywords)
+        ? keywordData.keywords.map(x => typeof x === "string" ? x : x?.name).filter(Boolean)
+        : undefined,
       videos: buildVideos(movie.slug || slug, type, episodes)
     };
 
