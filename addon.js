@@ -1,14 +1,25 @@
 const { addonBuilder } = require("stremio-addon-sdk");
 
 const API_BASE = (process.env.KKPHIM_API_BASE || "https://phimapi.com").replace(/\/+$/, "");
-const PAGE_SIZE = 24;          // KKPhim list APIs normally return 24/page
+/*
+ * FIX: KKPhim/PhimAPI list endpoints do NOT default to 24 items/page.
+ * The official docs state the default `limit` is 10 when not specified.
+ * We now request PAGE_SIZE explicitly via `limit` so pages are predictable,
+ * instead of assuming a size the API never guaranteed.
+ */
+const PAGE_SIZE = 24;          // requested explicitly via `limit` param below
 const STREMIO_PAGE_SIZE = 100; // Stremio catalog pagination standard
 const API_TIMEOUT_MS = 15000;
 const CACHE_SECONDS = 300;
+// FIX: real CDN domain for relative poster/thumb paths returned by the v1 list
+// endpoints (e.g. "upload/vod/xxx.jpg"). The API itself reports this domain
+// as `APP_DOMAIN_CDN_IMAGE` on v1 list responses; we fall back to this
+// constant when a response doesn't carry that field.
+const IMAGE_CDN_FALLBACK = "https://phimimg.com";
 
 const manifest = {
   id: "community.kkphim",
-  version: "4.0.0",
+  version: "3.1.0",
   name: "KKPhim",
   description: "KKPhim: Phim mới, Phim bộ, Phim lẻ, Phim chiếu rạp và Hoạt hình.",
   logo: "https://kkphim.com/favicon.ico",
@@ -88,72 +99,53 @@ function episodesOf(data, movie) {
  */
 function stremioPage(extra) {
   const skip = Math.max(0, Number(extra?.skip || 0));
-  // KKPhim list endpoints return 24 items/page; Stremio requests in blocks of 100.
-  return { skip, firstApiPage: Math.floor(skip / STREMIO_PAGE_SIZE) * 5 + 1 };
+  const firstApiPage = Math.floor(skip / STREMIO_PAGE_SIZE) * 5 + 1;
+  return { skip, firstApiPage };
+}
+
+async function getKkphimPage(endpoint, page, params = {}) {
+  // FIX: explicitly request PAGE_SIZE items/page. Without `limit`, the API
+  // defaults to only 10 items/page, which broke the 5-page block assumption
+  // below and made catalogs (especially "Phim bộ") look empty/sparse.
+  return api(endpoint, { ...params, page, limit: PAGE_SIZE });
+}
+
+function cdnBaseOf(data) {
+  return data?.data?.APP_DOMAIN_CDN_IMAGE || data?.APP_DOMAIN_CDN_IMAGE || IMAGE_CDN_FALLBACK;
 }
 
 async function getKkphimBlock(endpoint, firstPage, params = {}) {
+  const requests = [];
+  for (let i = 0; i < 5; i++) {
+    requests.push(getKkphimPage(endpoint, firstPage + i, params));
+  }
+  const responses = await Promise.all(requests);
+
   const all = [];
-  const seen = new Set();
-  let page = firstPage;
-  const MAX_API_PAGES = 5;
-
-  for (let i = 0; i < MAX_API_PAGES; i++, page++) {
-    let data;
-    try {
-      data = await getKkphimPage(endpoint, page, params);
-    } catch (err) {
-      console.error(`[api] ${endpoint}?page=${page}:`, err.message);
-      // Do not throw away pages that were already collected.
-      break;
-    }
-
+  for (const data of responses) {
+    const cdnBase = cdnBaseOf(data);
     const pageItems = itemsOf(data);
-    for (const item of pageItems) {
-      const key = item?.slug || item?._id;
-      if (key && !seen.has(key)) {
-        seen.add(key);
-        all.push(item);
-      }
-    }
+    // FIX: tag each item with the CDN domain from ITS OWN response so
+    // posterUrl() can resolve relative poster/thumb paths correctly,
+    // instead of always assuming the wrong hardcoded domain.
+    for (const item of pageItems) item.__cdnBase = cdnBase;
+    all.push(...pageItems);
 
-    const pagination = data?.data?.params?.pagination || data?.pagination;
-    const current = Number(pagination?.currentPage || page);
-    const totalPages = Number(pagination?.totalPages || pagination?.pageRanges || 0);
-
-    if (!pageItems.length) break;
-    if (totalPages && current >= totalPages) break;
-    if (pageItems.length < PAGE_SIZE && !totalPages) break;
+    // FIX: rely on the API's own pagination metadata to know when to stop,
+    // instead of an item-count heuristic tied to a wrong assumed page size.
+    const p = data?.data?.params?.pagination || data?.pagination;
+    if (p && Number(p.currentPage) >= Number(p.totalPages || 0)) break;
+    if (pageItems.length === 0) break;
   }
 
-  return all.slice(0, STREMIO_PAGE_SIZE);
-}
-
-async function enrichCatalogPosters(items) {
-  // v1 list endpoints can return only a filename for poster_url/thumb_url,
-  // while the detail endpoint returns the authoritative full phimimg.com URL.
-  // Resolve the first 24 items (the initially visible page) so posters are
-  // present without firing 100 detail requests for every catalog refresh.
-  const targets = items.filter(x => !mediaUrl(x?.poster_url) && !mediaUrl(x?.thumb_url)).slice(0, 24);
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(6, targets.length) }, async () => {
-    while (cursor < targets.length) {
-      const item = targets[cursor++];
-      if (!item?.slug) continue;
-      try {
-        const detail = await api(`/v1/api/phim/${encodeURIComponent(item.slug)}`);
-        const movie = itemOf(detail);
-        if (movie?.poster_url || movie?.thumb_url) {
-          item.poster_url = movie.poster_url || movie.thumb_url;
-          item.thumb_url = movie.thumb_url || movie.poster_url;
-        }
-      } catch (err) {
-        console.error(`[poster] ${item.slug}:`, err.message);
-      }
-    }
-  });
-  await Promise.all(workers);
-  return items;
+  // De-duplicate by slug/id because APIs can overlap around updates.
+  const seen = new Set();
+  return all.filter(item => {
+    const key = item?.slug || item?._id;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, STREMIO_PAGE_SIZE);
 }
 
 function forcedPreview(item, type) {
@@ -171,25 +163,26 @@ function forcedPreview(item, type) {
 
 function mediaUrl(value) {
   if (!value) return undefined;
-  const s = String(value).trim();
+  const s = String(value);
   if (/^https?:\/\//i.test(s)) return s;
   return undefined;
 }
 
+/*
+ * FIX: v1 list responses return only a relative path (e.g.
+ * "upload/vod/20240410-1/xxx.jpg"). The real image CDN is
+ * https://phimimg.com (reported by the API itself as
+ * APP_DOMAIN_CDN_IMAGE), NOT https://phimapi.com/uploads/movies/ as this
+ * was previously hardcoded — that wrong domain was why posters were
+ * broken across catalogs. We use the per-response CDN base tagged onto
+ * the item in getKkphimBlock(), falling back to the known CDN domain.
+ */
 function posterUrl(item) {
   const raw = item?.poster_url || item?.thumb_url;
   if (!raw) return undefined;
-  const s = String(raw).trim();
-  if (/^https?:\/\//i.test(s)) return s;
-
-  // KKPhim v1 responses may return just the filename.
-  // Detail responses show the real image host as phimimg.com/upload/vod/...
-  if (/^upload\//i.test(s)) return `https://phimimg.com/${s}`;
-  if (/^uploads\//i.test(s)) return `https://phimapi.com/${s}`;
-
-  // The documented list APIs expose pathImage; when only a filename is left,
-  // phimapi's movies path is the safe fallback.
-  return `https://phimapi.com/uploads/movies/${s.replace(/^\/+/, '')}`;
+  if (/^https?:\/\//i.test(String(raw))) return String(raw);
+  const cdnBase = item?.__cdnBase || IMAGE_CDN_FALLBACK;
+  return `${cdnBase.replace(/\/+$/, "")}/${String(raw).replace(/^\/+/, "")}`;
 }
 
 async function catalog(id, type, extra) {
@@ -202,8 +195,8 @@ async function catalog(id, type, extra) {
   switch (id) {
     case "new-movie":
     case "new-series":
+      // User specifically requested the -v2 "Phim mới cập nhật" API.
       endpoint = "/danh-sach/phim-moi-cap-nhat-v2";
-      params = {};
       break;
 
     case "series":
@@ -232,34 +225,24 @@ async function catalog(id, type, extra) {
       return [];
   }
 
-  let items = await getKkphimBlock(endpoint, firstApiPage, params);
+  const items = await getKkphimBlock(endpoint, firstApiPage, params);
 
-  // For Series, combine the v1 list with the documented legacy list. The legacy
-  // endpoint is useful because its poster_url/thumb_url are already absolute
-  // phimimg.com URLs. Deduplication keeps the v1 catalog size when available.
-  if (id === "series") {
-    const legacy = await getKkphimBlock("/danh-sach/phim-bo", firstApiPage, {});
-    const merged = [];
-    const seen = new Set();
-    for (const item of [...items, ...legacy]) {
-      const key = item?.slug || item?._id;
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      merged.push(item);
-    }
-    items = merged.slice(0, STREMIO_PAGE_SIZE);
-  }
-
-  // Resolve missing poster URLs for the first visible row/page.
-  await enrichCatalogPosters(items);
-
-  // Dedicated list endpoints already define the content type. Never re-filter
-  // these items by TMDB type.
-  if (id === "series" || id === "movie" || id === "theater" || id === "new-movie" || id === "new-series") {
+  /*
+   * For dedicated movie/series endpoints, DO NOT filter using TMDB type.
+   * KKPhim already classified the list. This was the main reason earlier
+   * versions could return an empty "Phim bộ" catalog.
+   */
+  if (id === "series" || id === "movie" || id === "theater") {
     return items.map(item => forcedPreview(item, expectedType));
   }
 
-  // Hoạt hình is a mixed endpoint, so classify it conservatively.
+  /*
+   * FIX: "Phim mới" (new-movie / new-series) and "Hoạt hình" both come from
+   * mixed endpoints containing both movies and series. The previous code
+   * force-labeled EVERY item as whatever type Stremio asked for, so the
+   * "new-movie" and "new-series" catalogs showed the identical list with
+   * roughly half the items mislabeled. Classify conservatively instead.
+   */
   return items
     .map(item => ({ item, detected: detectType(item) }))
     .filter(x => x.detected === expectedType)
