@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "rewrites": [
+    { "source": "/manifest.json", "destination": "/api" },
+    { "source": "/catalog/:type/:id.json", "destination": "/api" },
+    { "source": "/meta/:type/:id.json", "destination": "/api" },
+    { "source": "/health", "destination": "/api" }
+  ]
+}
