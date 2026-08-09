@@ -1,8 +1,8 @@
 {
   "name": "nuvio-phimapi-addon",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "private": true,
-  "description": "Nuvio/Stremio addon using KKPhim PhimAPI v1 — fixed posters + full meta",
+  "description": "Nuvio/Stremio addon using KKPhim PhimAPI v1 — posters + infinite scroll + series",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
