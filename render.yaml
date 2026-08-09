@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: kkphim-stremio-addon
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /manifest.json
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
