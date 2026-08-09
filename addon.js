@@ -8,7 +8,7 @@ const CACHE_SECONDS = 300;
 
 const manifest = {
   id: "community.kkphim",
-  version: "3.0.0",
+  version: "4.0.0",
   name: "KKPhim",
   description: "KKPhim: Phim mới, Phim bộ, Phim lẻ, Phim chiếu rạp và Hoạt hình.",
   logo: "https://kkphim.com/favicon.ico",
@@ -88,37 +88,72 @@ function episodesOf(data, movie) {
  */
 function stremioPage(extra) {
   const skip = Math.max(0, Number(extra?.skip || 0));
-  const firstApiPage = Math.floor(skip / STREMIO_PAGE_SIZE) * 5 + 1;
-  return { skip, firstApiPage };
-}
-
-async function getKkphimPage(endpoint, page, params = {}) {
-  return api(endpoint, { ...params, page });
+  // KKPhim list endpoints return 24 items/page; Stremio requests in blocks of 100.
+  return { skip, firstApiPage: Math.floor(skip / STREMIO_PAGE_SIZE) * 5 + 1 };
 }
 
 async function getKkphimBlock(endpoint, firstPage, params = {}) {
-  const requests = [];
-  for (let i = 0; i < 5; i++) {
-    requests.push(getKkphimPage(endpoint, firstPage + i, params));
-  }
-  const responses = await Promise.all(requests);
-
   const all = [];
-  for (const data of responses) {
-    all.push(...itemsOf(data));
-    const p = data?.data?.params?.pagination || data?.pagination;
-    if (p && Number(p.currentPage) >= Number(p.pageRanges || p.totalPages || 0)) break;
-    if (itemsOf(data).length < PAGE_SIZE) break;
+  const seen = new Set();
+  let page = firstPage;
+  const MAX_API_PAGES = 5;
+
+  for (let i = 0; i < MAX_API_PAGES; i++, page++) {
+    let data;
+    try {
+      data = await getKkphimPage(endpoint, page, params);
+    } catch (err) {
+      console.error(`[api] ${endpoint}?page=${page}:`, err.message);
+      // Do not throw away pages that were already collected.
+      break;
+    }
+
+    const pageItems = itemsOf(data);
+    for (const item of pageItems) {
+      const key = item?.slug || item?._id;
+      if (key && !seen.has(key)) {
+        seen.add(key);
+        all.push(item);
+      }
+    }
+
+    const pagination = data?.data?.params?.pagination || data?.pagination;
+    const current = Number(pagination?.currentPage || page);
+    const totalPages = Number(pagination?.totalPages || pagination?.pageRanges || 0);
+
+    if (!pageItems.length) break;
+    if (totalPages && current >= totalPages) break;
+    if (pageItems.length < PAGE_SIZE && !totalPages) break;
   }
 
-  // De-duplicate by slug/id because APIs can overlap around updates.
-  const seen = new Set();
-  return all.filter(item => {
-    const key = item?.slug || item?._id;
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  }).slice(0, STREMIO_PAGE_SIZE);
+  return all.slice(0, STREMIO_PAGE_SIZE);
+}
+
+async function enrichCatalogPosters(items) {
+  // v1 list endpoints can return only a filename for poster_url/thumb_url,
+  // while the detail endpoint returns the authoritative full phimimg.com URL.
+  // Resolve the first 24 items (the initially visible page) so posters are
+  // present without firing 100 detail requests for every catalog refresh.
+  const targets = items.filter(x => !mediaUrl(x?.poster_url) && !mediaUrl(x?.thumb_url)).slice(0, 24);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(6, targets.length) }, async () => {
+    while (cursor < targets.length) {
+      const item = targets[cursor++];
+      if (!item?.slug) continue;
+      try {
+        const detail = await api(`/v1/api/phim/${encodeURIComponent(item.slug)}`);
+        const movie = itemOf(detail);
+        if (movie?.poster_url || movie?.thumb_url) {
+          item.poster_url = movie.poster_url || movie.thumb_url;
+          item.thumb_url = movie.thumb_url || movie.poster_url;
+        }
+      } catch (err) {
+        console.error(`[poster] ${item.slug}:`, err.message);
+      }
+    }
+  });
+  await Promise.all(workers);
+  return items;
 }
 
 function forcedPreview(item, type) {
@@ -136,31 +171,25 @@ function forcedPreview(item, type) {
 
 function mediaUrl(value) {
   if (!value) return undefined;
-  const s = String(value);
+  const s = String(value).trim();
   if (/^https?:\/\//i.test(s)) return s;
   return undefined;
 }
 
-/*
- * v1 list responses may contain only a filename. The API docs show the
- * legacy list pathImage as https://phimapi.com/uploads/movies/.
- * Use that as a fast catalog-image fallback. The detail endpoint later
- * supplies the authoritative phimimg.com URL.
- */
 function posterUrl(item) {
   const raw = item?.poster_url || item?.thumb_url;
   if (!raw) return undefined;
-  if (/^https?:\/\//i.test(String(raw))) return String(raw);
-  return `https://phimapi.com/uploads/movies/${String(raw).replace(/^\/+/, "")}`;
-}
+  const s = String(raw).trim();
+  if (/^https?:\/\//i.test(s)) return s;
 
-async function resolvePoster(item) {
-  const raw = item?.poster_url || item?.thumb_url;
-  if (/^https?:\/\//i.test(String(raw || ""))) return String(raw);
+  // KKPhim v1 responses may return just the filename.
+  // Detail responses show the real image host as phimimg.com/upload/vod/...
+  if (/^upload\//i.test(s)) return `https://phimimg.com/${s}`;
+  if (/^uploads\//i.test(s)) return `https://phimapi.com/${s}`;
 
-  // Keep catalog response fast by first using the documented image path.
-  // Detail metadata will use the full authoritative poster URL.
-  return posterUrl(item);
+  // The documented list APIs expose pathImage; when only a filename is left,
+  // phimapi's movies path is the safe fallback.
+  return `https://phimapi.com/uploads/movies/${s.replace(/^\/+/, '')}`;
 }
 
 async function catalog(id, type, extra) {
@@ -173,8 +202,8 @@ async function catalog(id, type, extra) {
   switch (id) {
     case "new-movie":
     case "new-series":
-      // User specifically requested the -v2 "Phim mới cập nhật" API.
       endpoint = "/danh-sach/phim-moi-cap-nhat-v2";
+      params = {};
       break;
 
     case "series":
@@ -203,13 +232,29 @@ async function catalog(id, type, extra) {
       return [];
   }
 
-  const items = await getKkphimBlock(endpoint, firstApiPage, params);
+  let items = await getKkphimBlock(endpoint, firstApiPage, params);
 
-  /*
-   * For dedicated movie/series endpoints, DO NOT filter using TMDB type.
-   * KKPhim already classified the list. This was the main reason earlier
-   * versions could return an empty "Phim bộ" catalog.
-   */
+  // For Series, combine the v1 list with the documented legacy list. The legacy
+  // endpoint is useful because its poster_url/thumb_url are already absolute
+  // phimimg.com URLs. Deduplication keeps the v1 catalog size when available.
+  if (id === "series") {
+    const legacy = await getKkphimBlock("/danh-sach/phim-bo", firstApiPage, {});
+    const merged = [];
+    const seen = new Set();
+    for (const item of [...items, ...legacy]) {
+      const key = item?.slug || item?._id;
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+    items = merged.slice(0, STREMIO_PAGE_SIZE);
+  }
+
+  // Resolve missing poster URLs for the first visible row/page.
+  await enrichCatalogPosters(items);
+
+  // Dedicated list endpoints already define the content type. Never re-filter
+  // these items by TMDB type.
   if (id === "series" || id === "movie" || id === "theater" || id === "new-movie" || id === "new-series") {
     return items.map(item => forcedPreview(item, expectedType));
   }

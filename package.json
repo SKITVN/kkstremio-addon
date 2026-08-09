@@ -1,8 +1,8 @@
 {
   "name": "kkphim-stremio-addon",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "private": true,
-  "description": "KKPhim Stremio addon: five requested sections, v2 new updates, series/movie catalogs, metadata and streams.",
+  "description": "KKPhim Stremio addon: Phim mới v2, Phim bộ, Phim lẻ, Phim chiếu rạp, Hoạt hình.",
   "main": "addon.js",
   "scripts": {
     "start": "node server.js",

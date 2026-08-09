@@ -1,70 +1,37 @@
-# KKPhim Stremio Addon — Final
+# KKPhim Stremio — GitHub + Render
 
-Bản này được tối giản đúng theo yêu cầu:
+Bản 4.0.0 tập trung đúng 5 nhóm người dùng yêu cầu:
 
-1. **KKPhim - Phim mới**
-2. **KKPhim - Phim bộ**
-3. **KKPhim - Phim lẻ**
-4. **KKPhim - Phim chiếu rạp**
-5. **KKPhim - Hoạt hình**
+- Phim mới (dùng `phim-moi-cap-nhat-v2`)
+- Phim bộ
+- Phim lẻ
+- Phim chiếu rạp
+- Hoạt hình
 
-Stremio bắt buộc catalog phải có `type` riêng cho `movie` và `series`, vì vậy các mục có cả hai loại được khai báo thành hai catalog nội bộ nhưng dùng cùng tên hiển thị. Đây là yêu cầu của giao thức Stremio, không phải thêm mục lọc. 
+## API chính
 
-## Điểm sửa quan trọng
+- `GET /danh-sach/phim-moi-cap-nhat-v2`
+- `GET /v1/api/danh-sach/phim-bo`
+- `GET /v1/api/danh-sach/phim-le`
+- `GET /danh-sach/phim-chieu-rap`
+- `GET /v1/api/danh-sach/hoat-hinh`
+- `GET /v1/api/phim/{slug}`
+- `GET /v1/api/phim/{slug}/images`
+- `GET /v1/api/phim/{slug}/peoples`
+- `GET /v1/api/phim/{slug}/keywords`
 
-### Phim bộ
-Dùng trực tiếp:
+## Poster
 
-`/v1/api/danh-sach/phim-bo`
+KKPhim v1 có trường `poster_url`/`thumb_url` ở một số danh sách chỉ là filename, trong khi API chi tiết trả URL `phimimg.com/upload/vod/...`. Addon tự bổ sung poster bằng API chi tiết cho các phim đầu tiên của mỗi trang catalog.
 
-Không lọc lại bằng TMDB/type. Endpoint này đã là danh sách phim bộ.
+## Pagination
 
-### Phân trang
-Stremio thường yêu cầu `skip=0,100,200...`, trong khi KKPhim trả khoảng 24 phim/trang. Addon ghép tối đa 5 trang KKPhim thành 100 item cho mỗi trang Stremio. Vì vậy catalog không còn dừng ở 24 phim.
+Stremio yêu cầu `skip` theo block 100. Addon chuyển mỗi block thành tối đa 5 trang KKPhim (24 phim/trang), không dùng `Promise.all` toàn bộ block để tránh một request lỗi làm mất cả catalog.
 
-### Phim mới
-Dùng:
+## Render
 
-`/danh-sach/phim-moi-cap-nhat-v2`
+Build: `npm install`
 
-theo yêu cầu.
+Start: `npm start`
 
-### Phim lẻ
-Dùng:
-
-`/v1/api/danh-sach/phim-le`
-
-### Phim chiếu rạp
-Dùng endpoint KKPhim được tài liệu hóa:
-
-`/danh-sach/phim-chieu-rap`
-
-### Hoạt hình
-Dùng:
-
-`/v1/api/danh-sach/hoat-hinh`
-
-và phân loại movie/series theo TMDB/type.
-
-### Thông tin phim
-Khi mở phim, addon gọi:
-
-`/v1/api/phim/{slug}`
-
-để lấy mô tả, poster, thể loại, quốc gia, diễn viên, đạo diễn, trailer và danh sách tập/server. Stream dùng `link_m3u8` và fallback `link_embed`.
-
-## GitHub + Render
-
-1. Xóa các file addon cũ trong repository.
-2. Upload toàn bộ file của project này.
-3. Commit/push.
-4. Render sẽ tự deploy.
-5. Manifest:
-
-`https://kkphim-stremio-addon.onrender.com/manifest.json`
-
-Sau khi deploy bản mới, gỡ addon KKPhim cũ khỏi Stremio và cài lại manifest.
-
-## Lưu ý
-
-Addon lấy dữ liệu/stream từ API KKPhim/PhimAPI. Việc nguồn phim có tồn tại và URL stream còn hoạt động phụ thuộc API bên ngoài.
+Health check: `/manifest.json`
